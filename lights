@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# Stable entry point for controlling the Logitech G560 speaker lighting.
+#
+# Any agent (or human) can call this without knowing the venv path or the USB
+# permission details. It transparently:
+#   * locates the project virtualenv CLI (g560ctl/.venv/bin/logitech-lighting)
+#   * runs under the `logitech-lighting` group via `sg` when the current
+#     process doesn't yet carry that group (e.g. it started before the group
+#     was created, or before a fresh login) — this is what grants access to the
+#     group-restricted USB device node installed by the udev rule.
+#
+# Usage:
+#   ./lights solid 0000ff --zones primary     # front zones blue
+#   ./lights solid ff0000 --zones secondary   # rear zones red
+#   ./lights off                              # all zones off
+#   ./lights list-zones                       # show zones + aliases
+#   ./lights list-devices                     # show detected devices
+#
+# See CLAUDE.md for the full command/zone/color reference.
+
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLI="$REPO/g560ctl/.venv/bin/logitech-lighting"
+GROUP="logitech-lighting"
+
+if [[ ! -x "$CLI" ]]; then
+  echo "lights: CLI not found at $CLI" >&2
+  echo "lights: run the one-time install (see CLAUDE.md → Setup):" >&2
+  echo "  python3 -m venv g560ctl/.venv && g560ctl/.venv/bin/pip install -e g560ctl" >&2
+  exit 1
+fi
+
+if id -nG | tr ' ' '\n' | grep -qx "$GROUP"; then
+  # Group already active in this process — call the CLI directly.
+  exec "$CLI" "$@"
+else
+  # Re-run under the group so we can claim the USB interface. `sg` needs no
+  # password because the invoking user is already a member of the group.
+  exec sg "$GROUP" -c "$(printf '%q ' "$CLI" "$@")"
+fi

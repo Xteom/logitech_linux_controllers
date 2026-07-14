@@ -1,3 +1,12 @@
+"""DEAD CODE — legacy G560-only module, not on the runtime path.
+
+Superseded by ``logitech_lighting.core.models`` and
+``logitech_lighting.core.exceptions``. Both console scripts (``g560ctl`` and
+``logitech-lighting``) run the ``logitech_lighting`` package; ``g560ctl/cli.py``
+is only a thin shim that imports it. This module is retained for reference and
+is exercised solely by the legacy ``test/`` suite — do not extend it.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

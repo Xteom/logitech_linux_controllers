@@ -19,9 +19,11 @@ tui = [
 
 [project.scripts]
 g560ctl = "g560ctl.cli:main"
+logitech-lighting = "logitech_lighting.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["g560ctl*", "logitech_lighting*"]

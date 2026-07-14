@@ -1,44 +1,31 @@
-"""DEAD CODE — legacy G560-only module, not on the runtime path.
-
-Superseded by ``logitech_lighting.core.transport``. Both console scripts
-(``g560ctl`` and ``logitech-lighting``) run the ``logitech_lighting`` package;
-``g560ctl/cli.py`` is only a thin shim that imports it. This module is retained
-for reference and is exercised solely by the legacy ``test/`` suite — do not
-extend it.
-"""
-
 from __future__ import annotations
 
 import binascii
 from dataclasses import dataclass
+from typing import Protocol
 
 import usb.core
 import usb.util
 
-from .models import DeviceNotFoundError, PermissionDeniedError, TransferError
-
-VENDOR_ID = 0x046D
-PRODUCT_ID = 0x0A78
-INTERFACE = 0x02
-
-PREFIX = "11ff043a"
-SUFFIX = "000000000000"
+from logitech_lighting.core.exceptions import DeviceNotFoundError, PermissionDeniedError, TransferError
 
 
 @dataclass
 class DeviceSession:
+    """Generic USB device session."""
     device: usb.core.Device
+    interface: int
     detached_kernel_driver: bool = False
 
     def close(self) -> None:
         try:
-            usb.util.release_interface(self.device, INTERFACE)
+            usb.util.release_interface(self.device, self.interface)
         except Exception:
             pass
 
         if self.detached_kernel_driver:
             try:
-                self.device.attach_kernel_driver(INTERFACE)
+                self.device.attach_kernel_driver(self.interface)
             except Exception:
                 pass
 
@@ -48,31 +35,43 @@ class DeviceSession:
             pass
 
 
-class G560Transport:
+class USBTransport:
+    """Generic USB transport for Logitech devices."""
+    
+    def __init__(self, vendor_id: int, product_id: int, interface: int):
+        self.vendor_id = vendor_id
+        self.product_id = product_id
+        self.interface = interface
+
     def open(self) -> DeviceSession:
-        dev = usb.core.find(idVendor=VENDOR_ID, idProduct=PRODUCT_ID)
+        dev = usb.core.find(idVendor=self.vendor_id, idProduct=self.product_id)
         if dev is None:
             raise DeviceNotFoundError(
-                "Logitech G560 not found. Check USB connection and product support."
+                f"Device {self.vendor_id:04x}:{self.product_id:04x} not found. "
+                "Check USB connection and product support."
             )
 
         detached = False
         try:
-            if dev.is_kernel_driver_active(INTERFACE):
-                dev.detach_kernel_driver(INTERFACE)
+            if dev.is_kernel_driver_active(self.interface):
+                dev.detach_kernel_driver(self.interface)
                 detached = True
         except (NotImplementedError, usb.core.USBError):
             pass
 
         try:
-            usb.util.claim_interface(dev, INTERFACE)
+            usb.util.claim_interface(dev, self.interface)
         except usb.core.USBError as exc:
             raise PermissionDeniedError(
-                f"Could not claim USB interface {INTERFACE}. "
+                f"Could not claim USB interface {self.interface}. "
                 "Try a udev rule or root privileges."
             ) from exc
 
-        return DeviceSession(device=dev, detached_kernel_driver=detached)
+        return DeviceSession(
+            device=dev,
+            interface=self.interface,
+            detached_kernel_driver=detached
+        )
 
     def send_packet(self, session: DeviceSession, payload_hex: str) -> None:
         try:
@@ -80,11 +79,8 @@ class G560Transport:
                 0x21,
                 0x09,
                 0x0211,
-                INTERFACE,
+                self.interface,
                 binascii.unhexlify(payload_hex),
             )
         except usb.core.USBError as exc:
             raise TransferError(f"USB control transfer failed: {exc}") from exc
-
-    def make_payload(self, zone_hex: str, mode_hex: str, data_hex: str) -> str:
-        return PREFIX + zone_hex + mode_hex + data_hex + SUFFIX

@@ -1,3 +1,10 @@
+"""DEAD CODE — tests for the legacy ``g560ctl`` package modules.
+
+The runtime path is the ``logitech_lighting`` package (see the ``test_new_*.py``
+suite). These tests cover superseded modules and are kept only so the legacy
+code stays green — do not add coverage here.
+"""
+
 from g560ctl.colors import clamp_brightness, clamp_rate, parse_color
 from g560ctl.models import ValidationError
 

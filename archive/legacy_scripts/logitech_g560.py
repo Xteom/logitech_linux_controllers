@@ -1,4 +1,4 @@
-#!/home/xteom/Documents/personal/speakers_ligth/.venv/bin/python
+#!/usr/bin/env python3
 """
 logitech_g560.py
 Simple Logitech G560 LED controller for Linux.

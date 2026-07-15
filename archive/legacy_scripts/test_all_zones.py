@@ -1,4 +1,4 @@
-#!/home/xteom/Documents/personal/speakers_ligth/.venv/bin/python
+#!/usr/bin/env python3
 import binascii
 import usb.core
 import usb.util

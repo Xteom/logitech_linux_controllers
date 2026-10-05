@@ -65,6 +65,15 @@ recorded here rather than read from hardware. Re-apply with:
 ./lights solid 0000ff --zones primary && ./lights solid ff0000 --zones secondary
 ```
 
+Or, from any directory, `lights_default` — an executable in `~/.local/bin`
+(which is on `PATH`) that runs exactly those two commands against this repo's
+absolute `lights` path. `light_default` is the same file under its original
+name; `lights_default` is a symlink to it.
+
+`ligths -d` (or `--default`) does the same from anywhere. `~/.local/bin/ligths`
+passes any other arguments straight to this repo's `./lights`, e.g.
+`ligths off`. `lights` is a symlink to it, so both spellings work.
+
 ## Why the `sg` wrapper
 
 The udev rule (see [Setup](#setup)) makes the USB device node owned by group

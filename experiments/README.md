@@ -16,7 +16,9 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 The rule opens up only interface 1 (`ID_USB_INTERFACE_NUM=01`, the HID++
 node). Interface 0, where keystrokes arrive, stays root-only. After
 installing, check that `ls -l /dev/hidraw*` shows group `logitech-lighting` on
-the G815's interface-1 node only.
+the G815's interface-1 node only. If an older rule had already opened up
+other nodes, replug the keyboard: `udevadm trigger` does not revert a group
+that no rule assigns any more.
 
 Uses `import hidraw` (never `hid`, which is hidapi's libusb backend and would
 detach the keyboard driver).

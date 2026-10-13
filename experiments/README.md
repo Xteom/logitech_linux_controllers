@@ -13,6 +13,11 @@ sudo cp experiments/99-logitech-g815.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
+The rule opens up only interface 1 (`ID_USB_INTERFACE_NUM=01`, the HID++
+node). Interface 0, where keystrokes arrive, stays root-only. After
+installing, check that `ls -l /dev/hidraw*` shows group `logitech-lighting` on
+the G815's interface-1 node only.
+
 Uses `import hidraw` (never `hid`, which is hidapi's libusb backend and would
 detach the keyboard driver).
 
@@ -50,10 +55,11 @@ detach the keyboard driver).
   `0x01-0x68` accepted; every chunk from `0x69` up rejected with
   `INVALID_ARGUMENT`. A chunk is all-or-nothing, so one invalid zone sinks
   the valid zones beside it.
-- Not painted: Windows, Shift, Alt (and Ctrl on the red run — unclear on the
-  blue run). These are the modifiers (HID usages `0xE0-0xE7` → zones
-  `0xDD-0xE4` under `usage - 3`), which sat in rejected chunks. Everything else
-  (letters, numbers, F-row, arrows, etc.) lies in `0x01-0x68`.
+- Not painted: Windows, Shift, Alt, and Ctrl on the red run (on the blue run
+  Ctrl wasn't mentioned). Everything else (letters, numbers, F-row, arrows,
+  etc.) changed. *Superseded by rung C:* the modifiers are zones `0x68-0x6f`,
+  not `usage - 3`. Only `0x68` (left Ctrl) fell inside an accepted chunk,
+  which explains the Ctrl ambiguity; `0x69-0x6f` sat in rejected chunks.
 - `restore` returns the keyboard to its onboard effect.
 
 ### Rung C — key
@@ -85,15 +91,21 @@ detach the keyboard driver).
   (code 8): one 30 s run aborted on its first BUSY (before BUSY was
   tolerated), and another 30 s run got 584 BUSY replies. Even then the
   accepted rate was the same (5582 − 584 = 4998 in 30 s ≈ 166.6/s). BUSY frames
-  are fast rejections that are simply not drawn. The bursts could not be
-  triggered on demand. Nothing else had the device open (`hid-generic`
-  only; no Solaar/OpenRGB/ratbag), and typing had no effect. So the cause is
-  device-internal and still unknown. `latency` now counts BUSY instead of
-  aborting.
+  are not drawn. The bursts could not be triggered on demand. Nothing else
+  had the device open (`hid-generic` only; no Solaar/OpenRGB/ratbag), and
+  typing had no effect. **Cause unproven**, with two open hypotheses:
+  (a) the device rejects fast while busy internally; (b) stale BUSY replies
+  queued in the hidraw buffer get matched to later requests. The probe
+  reuses one sw_id (`0x0C`) for every request, so a late reply is
+  indistinguishable from a fresh one, and 584 BUSY frames costing ~zero
+  time fits (b) as well as (a). Which function (fn 6 or fn 7) got BUSY was
+  not recorded. `latency` now counts BUSY instead of aborting.
 - At ~167 Hz the red/blue alternation is seen as steady magenta.
-- Typing during the run: works normally. Keystrokes do **not** appear on
-  `/dev/hidraw2` (0 input reports while typing), so they arrive via
-  interface 0 and cannot interleave with HID++ replies.
+- Typing during the run: works normally. In this keyboard mode, keystrokes
+  did **not** appear on `/dev/hidraw2` (0 input reports while typing); they
+  arrive via interface 0. Interface 1 still declares an NKRO keyboard
+  collection, so in NKRO mode they could appear there. `match_reply`
+  ignores them regardless.
 
 ## Handoff to Phase 2 (ripple daemon)
 
@@ -118,4 +130,6 @@ detach the keyboard driver).
   without waiting for each reply (the endpoint may allow far more than 3 ms
   per round trip).
 - Phase 2 must tolerate BUSY replies (skip or retry the frame) rather
-  than treat them as fatal.
+  than treat them as fatal. It should also rotate the sw_id per request
+  (1-15) and log which function got BUSY, to settle hypothesis (a) vs (b)
+  above.

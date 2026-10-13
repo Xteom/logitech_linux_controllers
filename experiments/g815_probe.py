@@ -7,6 +7,7 @@ the findings log.
 Run: g560ctl/.venv/bin/python experiments/g815_probe.py <subcommand> ...
 """
 import argparse
+import string
 import sys
 import time
 
@@ -148,12 +149,10 @@ MODE_HOST = 0x02
 
 def parse_color(text):
     digits = text[1:] if text.startswith("#") else text
-    try:
-        if len(digits) != 6:
-            raise ValueError
-        return tuple(bytes.fromhex(digits))
-    except ValueError:
+    # bytes.fromhex skips whitespace, so validate the characters ourselves.
+    if len(digits) != 6 or not all(c in string.hexdigits for c in digits):
         raise ProbeError(f"color must be 6 hex digits like ff6600, got {text!r}")
+    return tuple(bytes.fromhex(digits))
 
 
 def single_value_reports(lighting_index, zones, rgb):

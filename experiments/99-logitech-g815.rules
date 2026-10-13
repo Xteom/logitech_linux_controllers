@@ -1,4 +1,8 @@
 # G815 (046d:c33f) hidraw access for experiments/g815_probe.py.
-# Note: this grants the logitech-lighting group read access to the raw
-# keyboard report stream (the HID++ node also carries keystrokes).
-KERNEL=="hidraw*", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c33f", MODE="0660", GROUP="logitech-lighting"
+# Only interface 1 (the HID++ node) is opened up; interface 0, which carries
+# the keystrokes, stays root-only. Interface 1 also declares an NKRO keyboard
+# collection, so in NKRO mode group members could read typing there too.
+# idVendor and bInterfaceNumber live on different parent devices, so they
+# can't be combined with ATTRS; usb_id imports both as ENV properties.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c33f", IMPORT{builtin}="usb_id"
+SUBSYSTEM=="hidraw", ENV{ID_VENDOR_ID}=="046d", ENV{ID_MODEL_ID}=="c33f", ENV{ID_USB_INTERFACE_NUM}=="01", MODE="0660", GROUP="logitech-lighting"

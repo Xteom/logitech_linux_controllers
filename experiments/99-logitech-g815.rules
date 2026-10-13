@@ -1,0 +1,4 @@
+# G815 (046d:c33f) hidraw access for experiments/g815_probe.py.
+# Note: this grants the logitech-lighting group read access to the raw
+# keyboard report stream (the HID++ node also carries keystrokes).
+KERNEL=="hidraw*", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c33f", MODE="0660", GROUP="logitech-lighting"

@@ -289,6 +289,36 @@ def cmd_key(args):
     print(f"key {args.key} (zone 0x{zone:02x}) -> #{args.color.lstrip('#')}")
 
 
+def cmd_latency(args):
+    zone = resolve_key(args.key)
+    colors = [(0xFF, 0x00, 0x00), (0x00, 0x00, 0xFF)]
+    dev, _ = open_keyboard()
+    try:
+        lighting = prepare(dev)
+        frames = [single_value_reports(lighting, [zone], rgb)[0] for rgb in colors]
+        count = 0
+        busy = 0
+        start = time.monotonic()
+        while (elapsed := time.monotonic() - start) < args.seconds:
+            try:
+                send(dev, frames[count % 2])
+                commit(dev, lighting)
+            except HidppError as exc:
+                # The G815 occasionally answers BUSY under sustained load;
+                # count it (Phase 2 needs the rate) instead of aborting.
+                if HIDPP_ERRORS.get(exc.code) != "BUSY":
+                    raise
+                busy += 1
+            count += 1
+    finally:
+        dev.close()
+    # A BUSY frame returns fast and is never drawn, so only accepted frames count.
+    fps = (count - busy) / elapsed
+    verdict = "smooth (>=60)" if fps >= 60 else "ok (>=30)" if fps >= 30 else "too slow (<30)"
+    print(f"{count} frames ({busy} busy) in {elapsed:.2f}s on {args.key}: "
+          f"{fps:.1f} accepted frames/s, {2 * fps:.1f} reports/s -> {verdict}")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="G815 lighting probe (Phase 1 spike)")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -307,6 +337,11 @@ def build_parser():
     p.add_argument("key", help="key name (a, esc, space, f1, ...) or raw zone 0xNN")
     p.add_argument("color", help="6-digit hex RGB, e.g. 00ff00")
     p.set_defaults(func=cmd_key)
+
+    p = subparsers.add_parser("latency", help="rung D: sustained updates/sec on one key")
+    p.add_argument("key", nargs="?", default="space", help="key to flip (default: space)")
+    p.add_argument("--seconds", type=float, default=5.0, help="measurement length")
+    p.set_defaults(func=cmd_latency)
 
     return parser
 

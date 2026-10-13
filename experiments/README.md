@@ -24,6 +24,7 @@ detach the keyboard driver).
 | B | `g560ctl/.venv/bin/python experiments/g815_probe.py solid ff0000` | Whole keyboard one color + frameEnd commit |
 | — | `g560ctl/.venv/bin/python experiments/g815_probe.py restore` | Hands lighting back to the onboard profile |
 | C | `g560ctl/.venv/bin/python experiments/g815_probe.py key a 00ff00` | Per-key addressing by name (or raw zone `0xNN`) |
+| D | `g560ctl/.venv/bin/python experiments/g815_probe.py latency [KEY] [--seconds N]` | Sustained acknowledged frames/sec |
 
 ## Findings log
 
@@ -69,3 +70,52 @@ detach the keyboard driver).
 - The full valid set is therefore `0x01-0x6f`, `0x99`, `0x9b-0x9e`,
   `0xb4-0xb8`, `0xd2`. This explains rung B: `0x68` (first modifier) was in
   an accepted chunk and the other modifiers were in rejected ones.
+
+### Rung D — latency
+
+- Runs (one frame = 1 setRgbZonesSingleValue + 1 frameEnd, each waited for):
+  - `834 frames (0 busy) in 5.00s on space: 166.7 accepted frames/s, 333.3 reports/s`, repeated
+    across 4 runs
+  - `1667 frames in 10.00s` on esc ×3 and space ×2: 166.6-166.7 frames/s, 0 busy
+  - `5000 frames (0 busy) in 30.00s on esc: 166.6 accepted frames/s, 333.3 reports/s`
+  - Two diagnostic runs of 40 s and one of 30 s: 6664 / 6665 / 4999 frames, 0 busy
+- Throughput is rock-steady at **~333 acknowledged reports/s (one round
+  trip ≈ 3 ms)**.
+- **Intermittent `BUSY` bursts.** Two runs out of ~15 got HID++ `BUSY`
+  (code 8): one 30 s run aborted on its first BUSY (before BUSY was
+  tolerated), and another 30 s run got 584 BUSY replies. Even then the
+  accepted rate was the same (5582 − 584 = 4998 in 30 s ≈ 166.6/s). BUSY frames
+  are fast rejections that are simply not drawn. The bursts could not be
+  triggered on demand. Nothing else had the device open (`hid-generic`
+  only; no Solaar/OpenRGB/ratbag), and typing had no effect. So the cause is
+  device-internal and still unknown. `latency` now counts BUSY instead of
+  aborting.
+- At ~167 Hz the red/blue alternation is seen as steady magenta.
+- Typing during the run: works normally. Keystrokes do **not** appear on
+  `/dev/hidraw2` (0 input reports while typing), so they arrive via
+  interface 0 and cannot interleave with HID++ replies.
+
+## Handoff to Phase 2 (ripple daemon)
+
+- Interface: the hidapi `hidraw` entry for `046d:c33f` with usage page
+  `0xFF43`, usage `0x0602` (here `/dev/hidraw2`, interface 1), opened with
+  `import hidraw`. Typing is unaffected.
+- Packets: setRgbZonesSingleValue (fn 6) and frameEnd (fn 7) on feature
+  0x8081, which sits at index 0x10 (discover via root getFeature, don't hardcode).
+  Host mode (`0x8100` fn 1 = `02`) is set before painting, and `restore` (`01`)
+  hands back to the onboard effect. Whether host mode is strictly
+  required was not isolated.
+- Key zones: `usage - 3` for the main block (`0x01-0x67`), modifiers
+  `0x68-0x6f` (`usage - 0x78`), media `0x99, 0x9b-0x9e`, G1-G5 `0xb4-0xb8`,
+  logo `0xd2`. Any invalid zone makes the device reject its whole 13-zone report,
+  so paint only known-valid zones.
+- Budget: ~333 acknowledged reports/s when waiting for every reply. A
+  ripple frame with K distinct colors costs about Σ⌈keys_per_color/13⌉ + 1
+  reports. Example: 8 brightness rings of ≤13 keys each = ~9 reports →
+  ~37 fps, which is "ok (>=30)", not "smooth". Levers for Phase 2: quantize
+  ripple colors to fewer levels, try fn 1 (individual colors, 4 keys/report)
+  or the consecutive/delta-compressed functions, and test pipelining writes
+  without waiting for each reply (the endpoint may allow far more than 3 ms
+  per round trip).
+- Phase 2 must tolerate BUSY replies (skip or retry the frame) rather
+  than treat them as fatal.

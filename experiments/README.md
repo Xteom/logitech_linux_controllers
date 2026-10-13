@@ -23,6 +23,7 @@ detach the keyboard driver).
 | A | `g560ctl/.venv/bin/python experiments/g815_probe.py enumerate` | Opens the HID++ vendor collection without disturbing typing; lists features |
 | B | `g560ctl/.venv/bin/python experiments/g815_probe.py solid ff0000` | Whole keyboard one color + frameEnd commit |
 | — | `g560ctl/.venv/bin/python experiments/g815_probe.py restore` | Hands lighting back to the onboard profile |
+| C | `g560ctl/.venv/bin/python experiments/g815_probe.py key a 00ff00` | Per-key addressing by name (or raw zone `0xNN`) |
 
 ## Findings log
 
@@ -53,3 +54,18 @@ detach the keyboard driver).
   `0xDD-0xE4` under `usage - 3`), which sat in rejected chunks. Everything else
   (letters, numbers, F-row, arrows, etc.) lies in `0x01-0x68`.
 - `restore` returns the keyboard to its onboard effect.
+
+### Rung C — key
+
+- Zone rule `usage - 3` confirmed for: `a` (0x01), `esc` (0x26), `space`
+  (0x29), `f12` (0x42). Each lit alone, as expected.
+- Mismatches: the modifiers are **not** `usage - 3` (zones `0xdd-0xe4` are
+  rejected). A one-zone-at-a-time scan of `0x69-0xfe` found exactly 18 valid
+  zones, and each group was confirmed visually:
+  - `0x68-0x6f`: the 8 modifiers (Ctrl/Shift/Alt/Win/…), i.e. `usage - 0x78`
+  - `0x99, 0x9b-0x9e`: media keys
+  - `0xb4-0xb8`: G1-G5
+  - `0xd2`: G logo
+- The full valid set is therefore `0x01-0x6f`, `0x99`, `0x9b-0x9e`,
+  `0xb4-0xb8`, `0xd2`. This explains rung B: `0x68` (first modifier) was in
+  an accepted chunk and the other modifiers were in rejected ones.

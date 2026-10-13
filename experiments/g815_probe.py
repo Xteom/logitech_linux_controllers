@@ -201,6 +201,33 @@ def commit(dev, lighting_index):
     send(dev, build_report(lighting_index, FN_FRAME_END))
 
 
+def _usage_keys():
+    usages = {chr(ord("a") + i): 0x04 + i for i in range(26)}
+    usages.update({str(n): 0x1E + (n - 1) for n in range(1, 10)})
+    usages["0"] = 0x27
+    usages.update({"enter": 0x28, "esc": 0x29, "backspace": 0x2A, "tab": 0x2B, "space": 0x2C})
+    usages.update({f"f{n}": 0x3A + (n - 1) for n in range(1, 13)})
+    return {name: usage - 3 for name, usage in usages.items()}
+
+
+KEYS = _usage_keys()
+
+
+def resolve_key(name):
+    text = name.lower()
+    if text.startswith("0x"):
+        try:
+            zone = int(text, 16)
+        except ValueError:
+            zone = -1
+        if 0x01 <= zone <= 0xFE:
+            return zone
+        raise ProbeError(f"raw zone must be 0x01-0xfe, got {name!r}")
+    if text in KEYS:
+        return KEYS[text]
+    raise ProbeError(f"unknown key {name!r}; known: {', '.join(sorted(KEYS))} or raw 0xNN")
+
+
 def cmd_enumerate(args):
     entries = hidraw.enumerate(VENDOR_ID, PRODUCT_ID)
     if not entries:
@@ -247,6 +274,21 @@ def cmd_restore(args):
     print("keyboard returned to onboard mode")
 
 
+def cmd_key(args):
+    zone = resolve_key(args.key)
+    rgb = parse_color(args.color)
+    dev, _ = open_keyboard()
+    try:
+        lighting = prepare(dev)
+        failed = paint(dev, lighting, [zone], rgb)
+        if failed:
+            raise failed[0][1]
+        commit(dev, lighting)
+    finally:
+        dev.close()
+    print(f"key {args.key} (zone 0x{zone:02x}) -> #{args.color.lstrip('#')}")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="G815 lighting probe (Phase 1 spike)")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -260,6 +302,11 @@ def build_parser():
 
     p = subparsers.add_parser("restore", help="hand lighting back to the onboard profile")
     p.set_defaults(func=cmd_restore)
+
+    p = subparsers.add_parser("key", help="rung C: one key by name")
+    p.add_argument("key", help="key name (a, esc, space, f1, ...) or raw zone 0xNN")
+    p.add_argument("color", help="6-digit hex RGB, e.g. 00ff00")
+    p.set_defaults(func=cmd_key)
 
     return parser
 

@@ -137,6 +137,70 @@ def find_feature(dev, feature_id):
     return reply[4] or None
 
 
+ZONES_PER_REPORT = 13
+ALL_ZONES = range(0x01, 0xFF)  # probe every possible zone id; 0x00/0xFF are reserved
+FN_SET_SINGLE_VALUE = 6
+FN_FRAME_END = 7
+FN_SET_ONBOARD_MODE = 1
+MODE_ONBOARD = 0x01
+MODE_HOST = 0x02
+
+
+def parse_color(text):
+    digits = text[1:] if text.startswith("#") else text
+    try:
+        if len(digits) != 6:
+            raise ValueError
+        return tuple(bytes.fromhex(digits))
+    except ValueError:
+        raise ProbeError(f"color must be 6 hex digits like ff6600, got {text!r}")
+
+
+def single_value_reports(lighting_index, zones, rgb):
+    """setRgbZonesSingleValue reports covering `zones`, 13 zones per report.
+
+    A short final chunk is padded by repeating its last zone, so no filler
+    byte is ever interpreted as a zone id.
+    """
+    zones = list(zones)
+    if not zones:
+        raise ProbeError("no zones to paint")
+    reports = []
+    for start in range(0, len(zones), ZONES_PER_REPORT):
+        chunk = zones[start:start + ZONES_PER_REPORT]
+        chunk += [chunk[-1]] * (ZONES_PER_REPORT - len(chunk))
+        reports.append(build_report(lighting_index, FN_SET_SINGLE_VALUE, bytes(rgb) + bytes(chunk)))
+    return reports
+
+
+def set_onboard_mode(dev, mode):
+    index = find_feature(dev, FEATURES["onboard_profiles"])
+    if index:
+        send(dev, build_report(index, FN_SET_ONBOARD_MODE, bytes([mode])))
+
+
+def prepare(dev):
+    lighting = find_feature(dev, FEATURES["per_key_lighting_v2"])
+    if not lighting:
+        raise ProbeError("per-key lighting feature 0x8081 not supported by this firmware")
+    set_onboard_mode(dev, MODE_HOST)
+    return lighting
+
+
+def paint(dev, lighting_index, zones, rgb):
+    failed = []
+    for report in single_value_reports(lighting_index, zones, rgb):
+        try:
+            send(dev, report)
+        except HidppError as exc:
+            failed.append((list(report[7:]), exc))
+    return failed
+
+
+def commit(dev, lighting_index):
+    send(dev, build_report(lighting_index, FN_FRAME_END))
+
+
 def cmd_enumerate(args):
     entries = hidraw.enumerate(VENDOR_ID, PRODUCT_ID)
     if not entries:
@@ -159,12 +223,43 @@ def cmd_enumerate(args):
         dev.close()
 
 
+def cmd_solid(args):
+    rgb = parse_color(args.color)
+    dev, _ = open_keyboard()
+    try:
+        lighting = prepare(dev)
+        failed = paint(dev, lighting, ALL_ZONES, rgb)
+        commit(dev, lighting)
+    finally:
+        dev.close()
+    total = len(single_value_reports(lighting, ALL_ZONES, rgb))
+    print(f"painted #{args.color.lstrip('#')}: {total - len(failed)}/{total} chunks accepted")
+    for zones, exc in failed:
+        print(f"  rejected zones 0x{zones[0]:02x}-0x{zones[-1]:02x}: {exc}")
+
+
+def cmd_restore(args):
+    dev, _ = open_keyboard()
+    try:
+        set_onboard_mode(dev, MODE_ONBOARD)
+    finally:
+        dev.close()
+    print("keyboard returned to onboard mode")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="G815 lighting probe (Phase 1 spike)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p = subparsers.add_parser("enumerate", help="rung A: find and open the HID++ interface")
     p.set_defaults(func=cmd_enumerate)
+
+    p = subparsers.add_parser("solid", help="rung B: whole keyboard to one color")
+    p.add_argument("color", help="6-digit hex RGB, e.g. ff6600")
+    p.set_defaults(func=cmd_solid)
+
+    p = subparsers.add_parser("restore", help="hand lighting back to the onboard profile")
+    p.set_defaults(func=cmd_restore)
 
     return parser
 

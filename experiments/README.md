@@ -21,6 +21,8 @@ detach the keyboard driver).
 | Rung | Command | Proves |
 | --- | --- | --- |
 | A | `g560ctl/.venv/bin/python experiments/g815_probe.py enumerate` | Opens the HID++ vendor collection without disturbing typing; lists features |
+| B | `g560ctl/.venv/bin/python experiments/g815_probe.py solid ff0000` | Whole keyboard one color + frameEnd commit |
+| — | `g560ctl/.venv/bin/python experiments/g815_probe.py restore` | Hands lighting back to the onboard profile |
 
 ## Findings log
 
@@ -36,3 +38,18 @@ detach the keyboard driver).
   g810-led hardcodes).
 - Typing during the run: unaffected. The keyboard kept working; the run is
   sub-second and hidraw never detaches the input driver.
+
+### Rung B — solid
+
+- Packet: `11 ff 10 6c RR GG BB z×13` (0x8081 fn 6 setRgbZonesSingleValue),
+  commit `11 ff 10 7c` (fn 7 frameEnd); host mode via `11 ff 11 1c 02`
+  (0x8100 fn 1 setOnboardMode).
+- Result: visible change, red then blue. Chunks accepted 8/20: zones
+  `0x01-0x68` accepted; every chunk from `0x69` up rejected with
+  `INVALID_ARGUMENT`. A chunk is all-or-nothing, so one invalid zone sinks
+  the valid zones beside it.
+- Not painted: Windows, Shift, Alt (and Ctrl on the red run — unclear on the
+  blue run). These are the modifiers (HID usages `0xE0-0xE7` → zones
+  `0xDD-0xE4` under `usage - 3`), which sat in rejected chunks. Everything else
+  (letters, numbers, F-row, arrows, etc.) lies in `0x01-0x68`.
+- `restore` returns the keyboard to its onboard effect.

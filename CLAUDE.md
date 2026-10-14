@@ -57,17 +57,21 @@ The G560 has four addressable zones — a front ("primary") and rear
 
 ## Current state
 
-The lights are configured as **primary (front) = blue `0000ff`**, **secondary
-(rear) = red `ff0000`**. The device does not report its state back, so this is
-recorded here rather than read from hardware. Re-apply with:
+The default setup is:
+- **G560 speakers:** **primary (front) = blue `0000ff`**, **secondary (rear) = red `ff0000`**. The speakers
+  do not report their state back, so this is recorded here rather than read from hardware.
+- **G815 keyboard:** the **light-blue wave** (see below).
+
+Re-apply it with:
 
 ```bash
-./lights solid 0000ff --zones primary && ./lights solid ff0000 --zones secondary
+./lights solid 0000ff --zones primary && ./lights solid ff0000 --zones secondary && ./lights wave blue
 ```
 
 Or, from any directory, `lights_default` — an executable in `~/.local/bin`
-(which is on `PATH`) that runs exactly those two commands against this repo's
-absolute `lights` path. `light_default` is the same file under its original
+(which is on `PATH`) that runs exactly those three commands against this repo's
+absolute `lights` path. `wave blue` turns the wave back on if it was off, and is a harmless
+no-op if it is already running in blue. `light_default` is the same file under its original
 name; `lights_default` is a symlink to it.
 
 `ligths -d` (or `--default`) does the same from anywhere. `~/.local/bin/ligths`

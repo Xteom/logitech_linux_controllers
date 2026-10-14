@@ -74,6 +74,46 @@ name; `lights_default` is a symlink to it.
 passes any other arguments straight to this repo's `./lights`, e.g.
 `ligths off`. `lights` is a symlink to it, so both spellings work.
 
+## G815 keyboard wave (keypress ripple)
+
+The **Logitech G815** keyboard (`046d:c33f`) gets a reactive effect: every key
+press sends a ring of light across the keyboard over a dark indigo base
+(`#140028`). A systemd **user** service, `g815-wave`, runs it from login. Switch
+it from anywhere:
+
+| Command | Effect |
+| --- | --- |
+| `ligths wave red` | red rings (white → red → magenta) |
+| `ligths wave blue` | light-blue rings (white → cyan → blue) |
+| `ligths wave off` | hand the keyboard back to its onboard lighting (stays off across replug and reboot) |
+| `ligths wave status` | preset, state, keyboard connected, fps of the last burst of frames |
+
+- **States:**
+  - `off`: you chose off.
+  - `disconnected`: keyboard absent; it is polled every 2 s.
+  - `locked`: screen locked or lock state unknown; base color only, no rings.
+  - `active`: rings live.
+- **Choice storage:** your choice is kept in `~/.config/logitech-lighting/wave.json`.
+- **Code and design:**
+  - Code: `g560ctl/src/logitech_lighting/devices/g815/`.
+  - Design and hardware findings: `docs/superpowers/specs/2026-10-13-g815-wave-design.md`.
+- **Install (one-time, already done on this machine):**
+
+  ```bash
+  install -Dm644 systemd/g815-wave.service ~/.config/systemd/user/g815-wave.service
+  systemctl --user daemon-reload
+  systemctl --user enable --now g815-wave
+  ```
+
+- **Access:** the HID++ node is opened through the `logitech-lighting` group. The
+  Phase 1 udev rule `experiments/99-logitech-g815.rules` grants it for interface 1
+  only. Key presses come from X11 (XInput2), so the `input` group is not needed.
+- **Troubleshooting:**
+  - `wave daemon not running` → `systemctl --user start g815-wave`.
+  - Logs → `journalctl --user -u g815-wave -n 50`.
+  - The journal says DISPLAY/XAUTHORITY are missing → `systemctl --user import-environment DISPLAY XAUTHORITY`, then `systemctl --user restart g815-wave`.
+  - Leftover ripple colors after the daemon was killed hard → press **M1**, which re-selects the onboard profile.
+
 ## Why the `sg` wrapper
 
 The udev rule (see [Setup](#setup)) makes the USB device node owned by group

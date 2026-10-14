@@ -1,0 +1,15 @@
+# G815 keypress ripple daemon. Install (one time):
+#   install -Dm644 systemd/g815-wave.service ~/.config/systemd/user/g815-wave.service
+#   systemctl --user daemon-reload && systemctl --user enable --now g815-wave
+[Unit]
+Description=Logitech G815 keypress ripple lighting
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/Documents/personal/pc_tweaks/speakers_ligth/lights wave daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

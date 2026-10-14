@@ -41,7 +41,7 @@ def format_status(reply: dict) -> str:
         f"fps:      {reply['fps']} (last burst of frames)",
     ]
     if reply.get("lock") == "unknown":
-        lines.append("lock state unknown — rings stay paused until GNOME ScreenSaver answers")
+        lines.append("lock state unknown — rings stay paused until logind reports the session lock state")
     return "\n".join(lines)
 
 

@@ -31,7 +31,7 @@ CONTROL_CHECK = 10.0
 RECONNECT_POLL = 2.0
 CLAIM_BACKOFF = (2.0, 4.0, 8.0, 16.0, 30.0)
 LOCK_POLL = 1.0
-GDBUS = "/usr/bin/gdbus"
+LOGINCTL = "/usr/bin/loginctl"
 SOCKET_NAME = "g815-wave.sock"
 LOCK_NAME = "g815-wave.lock"
 STOP_SIGNALS = {signal.SIGTERM, signal.SIGINT}
@@ -84,18 +84,24 @@ class StateFile:
         tmp.replace(self.path)
 
 
-def query_lock(run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> bool | None:
-    """GNOME ScreenSaver GetActive: True/False, or None when unknown (treated as locked)."""
+def query_lock(run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+               uid: int | None = None) -> bool | None:
+    """logind LockedHint of the user's graphical session: True/False, or None when unknown
+    (treated as locked). GNOME's ScreenSaver.GetActive was unreliable on this machine."""
+    uid = os.getuid() if uid is None else uid
     try:
-        out = run([GDBUS, "call", "--session", "--dest", "org.gnome.ScreenSaver",
-                   "--object-path", "/org/gnome/ScreenSaver",
-                   "--method", "org.gnome.ScreenSaver.GetActive"],
+        user = run([LOGINCTL, "show-user", str(uid), "-p", "Display", "--value"],
+                   capture_output=True, text=True, timeout=0.5)
+        session = user.stdout.strip()
+        if user.returncode != 0 or not session:
+            return None
+        out = run([LOGINCTL, "show-session", session, "-p", "LockedHint", "--value"],
                   capture_output=True, text=True, timeout=0.5)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if out.returncode != 0:
         return None
-    return {"(true,)": True, "(false,)": False}.get(out.stdout.strip())
+    return {"yes": True, "no": False}.get(out.stdout.strip())
 
 
 class LockWatcher(threading.Thread):
@@ -199,7 +205,7 @@ class Daemon:
         presses = self.keys.poll()                  # X connection loss propagates to run_daemon
         self.locked = self.lock_state()
         if self.locked is None and not self._lock_warned:
-            log.warning("lock state unknown (GNOME ScreenSaver not answering); rings paused")
+            log.warning("lock state unknown (logind LockedHint unavailable); rings paused")
         self._lock_warned = self.locked is None
         self._apply(now)
         if self.kb is not None:

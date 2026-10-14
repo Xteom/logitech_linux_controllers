@@ -39,19 +39,41 @@ def test_corrupt_state_file_falls_back_and_is_rewritten(tmp_path, content) -> No
     assert json.loads(path.read_text()) == {"preset": "red", "off": False}
 
 
-@pytest.mark.parametrize("stdout,code,expected", [
-    ("(true,)\n", 0, True), ("(false,)\n", 0, False), ("garbage", 0, None), ("", 1, None),
+def _loginctl(display: str = "2\n", locked: str = "no\n", code: int = 0):
+    """Fake subprocess.run for `loginctl show-user` / `show-session`; records the argv."""
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        if argv[1] == "show-user":
+            return subprocess.CompletedProcess(argv, 0, stdout=display, stderr="")
+        return subprocess.CompletedProcess(argv, code, stdout=locked, stderr="")
+
+    return run, calls
+
+
+@pytest.mark.parametrize("locked,code,expected", [
+    ("yes\n", 0, True), ("no\n", 0, False), ("garbage", 0, None), ("", 1, None),
 ])
-def test_query_lock_parses_gdbus(stdout, code, expected) -> None:
-    run = lambda *a, **k: subprocess.CompletedProcess(a, code, stdout=stdout, stderr="")
-    assert query_lock(run) is expected
+def test_query_lock_reads_logind_locked_hint(locked, code, expected) -> None:
+    # GNOME's ScreenSaver.GetActive proved unreliable on this Pop!_OS session (true for 8 s
+    # of one lock, never during the next); logind's LockedHint tracked lock/unlock exactly.
+    run, calls = _loginctl(locked=locked, code=code)
+    assert query_lock(run, uid=1000) is expected
+    assert calls[0][1:3] == ["show-user", "1000"] and calls[1][1:3] == ["show-session", "2"]
+    assert "LockedHint" in calls[1]
 
 
-@pytest.mark.parametrize("exc", [FileNotFoundError("gdbus"), subprocess.TimeoutExpired("gdbus", 0.5)])
+def test_query_lock_without_graphical_session_is_unknown() -> None:
+    run, _ = _loginctl(display="\n")
+    assert query_lock(run, uid=1000) is None
+
+
+@pytest.mark.parametrize("exc", [FileNotFoundError("loginctl"), subprocess.TimeoutExpired("loginctl", 0.5)])
 def test_query_lock_failure_is_unknown(exc) -> None:
     def run(*a, **k):
         raise exc
-    assert query_lock(run) is None
+    assert query_lock(run, uid=1000) is None
 
 
 def test_connects_then_active_when_unlocked(tmp_path) -> None:

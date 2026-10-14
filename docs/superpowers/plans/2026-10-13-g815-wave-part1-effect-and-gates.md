@@ -1283,7 +1283,7 @@ def g815_ids(d):
 
 def main():
     d = display.Display()
-    opcode = d.get_extension_major("XInputExtension")
+    opcode = d.display.get_extension_major("XInputExtension")
     v = xinput.XIQueryVersion(display=d.display, opcode=opcode, major_version=2, minor_version=2)
     print(f"XI negotiated {v.major_version}.{v.minor_version}")
     if (v.major_version, v.minor_version) < (2, 1):

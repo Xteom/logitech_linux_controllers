@@ -154,6 +154,7 @@ def cmd_fps(args):
     names = [k.name for k in KEYS if k.evdev is not None and len(k.name) == 1]
     prev = None
     committed = abandoned = busy_end = writes_total = 0
+    end_kinds, abandon_kinds = {}, {}               # frameEnd non-ok results; abandon causes
     next_press = start = time.monotonic()
     while (now := time.monotonic()) - start < args.seconds:
         while next_press <= now:                       # synthetic fast typing
@@ -174,12 +175,15 @@ def cmd_fps(args):
                     time.sleep(args.gap_ms / 1000)
             if time.monotonic() > deadline:
                 ok = False
+                abandon_kinds["deadline"] = abandon_kinds.get("deadline", 0) + 1
                 break
             r = d.read(5)
             if r is None:
                 continue
             if r[2] == 0xFF and r[4] in pending:
                 ok = False
+                code = f"err{r[5]:#04x}"
+                abandon_kinds[code] = abandon_kinds.get(code, 0) + 1
             elif r[2] == pk and r[3] in pending:
                 pending.pop(r[3])
         if not ok:
@@ -191,7 +195,10 @@ def cmd_fps(args):
             continue
         end = time.monotonic() + 0.150
         while time.monotonic() < end:
-            kind, _ = d.request(pk, FN_FRAME_END, b"\x00", timeout=0.05)
+            kind, r = d.request(pk, FN_FRAME_END, b"\x00", timeout=0.05)
+            if kind != "ok":
+                label = f"err{r[5]:#04x}" if kind == "error" else kind
+                end_kinds[label] = end_kinds.get(label, 0) + 1
             if kind == "ok":
                 committed += 1
                 prev = nxt
@@ -204,6 +211,7 @@ def cmd_fps(args):
     print(f"{committed} committed frames in {elapsed:.1f}s = {committed / elapsed:.1f} fps "
           f"(window {args.window}, {args.rate}/s presses, {writes_total / max(committed, 1):.1f} writes/frame, "
           f"{abandoned} abandoned, {busy_end} frameEnd retries)")
+    print(f"  frameEnd non-ok by kind: {end_kinds}; abandon causes: {abandon_kinds}")
 
 
 def main(argv=None):

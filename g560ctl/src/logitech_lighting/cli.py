@@ -64,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_tui = sub.add_parser("tui", help="Launch the interactive terminal UI")
     p_tui.set_defaults(func="tui")
 
+    # G815 keyboard ripple (talks to the g815-wave daemon; never touches the G560)
+    p_wave = sub.add_parser("wave", help="G815 keyboard ripple: red, blue, off, status, daemon")
+    p_wave.add_argument("action", choices=["red", "blue", "off", "status", "daemon"])
+    p_wave.set_defaults(func="wave")
+
     return parser
 
 
@@ -98,6 +103,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.func == "list_devices":
             print_devices()
             return 0
+
+        # G815 wave: dispatched before any G560 setup
+        if args.func == "wave":
+            from logitech_lighting.devices.g815.wave_cli import run_wave
+            return run_wave(args.action)
 
         # Get device config
         device_id = args.device or get_default_device()

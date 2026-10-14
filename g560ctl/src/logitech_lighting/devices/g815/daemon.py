@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import collections
+import fcntl
 import json
 import logging
 import os
+import selectors
+import signal
+import socket
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -286,3 +291,135 @@ class Daemon:
             self.kb.release()
             self.connector.drop()
             self.kb = None
+
+
+# -- service plumbing ---------------------------------------------------------
+
+def acquire_lock(path: Path) -> int | None:
+    """Exclusive flock held for the daemon's lifetime; None if another daemon holds it."""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def bind_socket(path: Path) -> socket.socket:
+    """Only the lock holder calls this, so removing a leftover socket file is safe."""
+    path.unlink(missing_ok=True)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    old = os.umask(0o177)
+    try:
+        sock.bind(str(path))
+    finally:
+        os.umask(old)
+    os.chmod(path, 0o600)
+    sock.listen(4)
+    sock.setblocking(False)
+    return sock
+
+
+def _serve_client(listener: socket.socket, daemon: Daemon, now: float) -> None:
+    try:
+        conn, _ = listener.accept()
+    except BlockingIOError:
+        return
+    with conn:
+        conn.settimeout(1.0)
+        try:
+            data = b""
+            while not data.endswith(b"\n") and len(data) < 4096:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            try:
+                req = json.loads(data)
+                reply = daemon.handle(req, now) if isinstance(req, dict) else {"ok": False, "error": "bad request"}
+            except ValueError:
+                reply = {"ok": False, "error": "bad request"}
+            conn.sendall(json.dumps(reply).encode() + b"\n")
+        except OSError as exc:
+            log.debug("control client error: %s", exc)
+
+
+def serve(daemon: Daemon, listener: socket.socket, stop: threading.Event,
+          clock: Callable[[], float] = time.monotonic, wake_fd: int | None = None) -> None:
+    sel = selectors.DefaultSelector()
+    sel.register(listener, selectors.EVENT_READ)
+    if wake_fd is not None:
+        sel.register(wake_fd, selectors.EVENT_READ)
+    next_tick = clock()
+    try:
+        while not stop.is_set():
+            for key, _ in sel.select(max(0.0, next_tick - clock())):
+                if key.fileobj is listener:
+                    _serve_client(listener, daemon, clock())
+                else:
+                    next_tick = clock()          # X input arrived: handle presses now
+            now = clock()
+            if now >= next_tick:
+                daemon.tick(now)
+                next_tick = now + FRAME_INTERVAL
+    finally:
+        sel.close()
+
+
+def run_daemon(
+    env: dict[str, str] | os._Environ = os.environ,
+    make_keys: Callable[[], object] | None = None,
+    make_connector: Callable[[], Connector] = Connector,
+    lock_query: Callable[[], bool | None] = query_lock,
+    state_path: Path | None = None,
+    stop: threading.Event | None = None,
+) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    if not env.get("DISPLAY") or not env.get("XAUTHORITY"):
+        log.error("DISPLAY/XAUTHORITY missing from the service environment; run: %s", ENV_HINT)
+        return 0
+    rt = runtime_dir(env)
+    lock_fd = acquire_lock(rt / LOCK_NAME)
+    if lock_fd is None:
+        print("g815 wave daemon already running")
+        return 1
+    stop = stop or threading.Event()
+    watcher = LockWatcher(lock_query)
+    listener = None
+    daemon = None
+    previous: dict[int, object] = {}
+    try:
+        from Xlib.error import ConnectionClosedError
+
+        from logitech_lighting.devices.g815.keys import XInputTooOld, XKeySource
+
+        try:
+            keys = (make_keys or XKeySource)()
+        except XInputTooOld as exc:
+            log.error("%s", exc)
+            return 1
+        listener = bind_socket(rt / SOCKET_NAME)
+        daemon = Daemon(make_connector(), keys, lambda: watcher.locked,
+                        StateFile(state_path or default_state_path()))
+        watcher.locked = lock_query()
+        watcher.start()
+        if threading.current_thread() is threading.main_thread():
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                previous[sig] = signal.signal(sig, lambda *_: stop.set())
+        log.info("wave daemon started (preset %s, %s)", daemon.preset, "off" if daemon.off else "on")
+        try:
+            serve(daemon, listener, stop, wake_fd=keys.fileno() if hasattr(keys, "fileno") else None)
+        except ConnectionClosedError:
+            log.info("X session closed; exiting")
+        return 0
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+        watcher.stop()
+        if daemon is not None:
+            daemon.shutdown()
+        if listener is not None:
+            listener.close()
+            (rt / SOCKET_NAME).unlink(missing_ok=True)
+        os.close(lock_fd)

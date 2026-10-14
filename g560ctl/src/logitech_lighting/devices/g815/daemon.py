@@ -24,7 +24,7 @@ from logitech_lighting.devices.g815.state import State, decide, effects
 
 log = logging.getLogger("g815-wave")
 
-DEFAULT_PRESET = "red"
+DEFAULT_PRESET = "blue"
 FRAME_INTERVAL = 1 / 60
 CONTROL_CHECK = 10.0
 RECONNECT_POLL = 2.0

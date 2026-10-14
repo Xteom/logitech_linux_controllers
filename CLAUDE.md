@@ -83,8 +83,8 @@ it from anywhere:
 
 | Command | Effect |
 | --- | --- |
+| `ligths wave blue` | light-blue rings (white → cyan → blue) — the default |
 | `ligths wave red` | red rings (white → red → magenta) |
-| `ligths wave blue` | light-blue rings (white → cyan → blue) |
 | `ligths wave off` | hand the keyboard back to its onboard lighting (stays off across replug and reboot) |
 | `ligths wave status` | preset, state, keyboard connected, fps of the last burst of frames |
 

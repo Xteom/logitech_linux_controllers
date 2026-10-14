@@ -24,7 +24,7 @@ def _daemon(tmp_path, state=None):
 
 def test_state_file_round_trip_and_default(tmp_path) -> None:
     sf = StateFile(tmp_path / "sub" / "wave.json")
-    assert sf.load() == ("red", False)
+    assert sf.load() == ("blue", False)
     sf.save("blue", True)
     assert sf.load() == ("blue", True)
 
@@ -33,8 +33,8 @@ def test_state_file_round_trip_and_default(tmp_path) -> None:
 def test_corrupt_state_file_falls_back_and_is_rewritten(tmp_path, content) -> None:
     path = tmp_path / "wave.json"
     path.write_text(content)
-    assert StateFile(path).load() == ("red", False)
-    assert json.loads(path.read_text()) == {"preset": "red", "off": False}
+    assert StateFile(path).load() == ("blue", False)
+    assert json.loads(path.read_text()) == {"preset": "blue", "off": False}
 
 
 def test_connects_then_active(tmp_path) -> None:
@@ -50,7 +50,7 @@ def test_presses_ripple_when_active(tmp_path) -> None:
     keys.pending = ["g"]
     d.tick(10.02)
     d.tick(10.04)
-    assert conn.kb.frames[-1][BY_NAME["g"].zone] == PRESETS["red"].stops[0]
+    assert conn.kb.frames[-1][BY_NAME["g"].zone] == PRESETS["blue"].stops[0]
 
 
 def test_presses_while_disconnected_are_dropped(tmp_path) -> None:
@@ -71,7 +71,7 @@ def test_off_releases_and_is_sticky(tmp_path) -> None:
     for i in range(50):
         d.tick(11.0 + i)
     assert conn.connects == 1
-    assert json.loads((tmp_path / "wave.json").read_text()) == {"preset": "red", "off": True}
+    assert json.loads((tmp_path / "wave.json").read_text()) == {"preset": "blue", "off": True}
 
 
 def test_off_state_file_means_no_claim_at_start(tmp_path) -> None:
@@ -193,4 +193,4 @@ def test_gkey_presses_ripple_when_active(tmp_path) -> None:
     conn.kb.gkeys = ["g3"]
     d.tick(10.02)
     d.tick(10.04)
-    assert conn.kb.frames[-1][BY_NAME["g3"].zone] == PRESETS["red"].stops[0]
+    assert conn.kb.frames[-1][BY_NAME["g3"].zone] == PRESETS["blue"].stops[0]

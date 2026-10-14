@@ -99,6 +99,11 @@ def cmd_release(args):
         print("SetSWControl release:", d.request(d.idx["effects"], 5, SW_RELEASE)[0])
     if d.idx["onboard"]:
         print("onboard mode:", d.request(d.idx["onboard"], 1, b"\x01")[0])
+        if args.reselect_profile:                       # onboard mode alone keeps our last frame
+            kind, r = d.request(d.idx["onboard"], 4)    # getCurrentProfile
+            print("current profile:", kind, r[4:6].hex(" ") if r else None)
+            if kind == "ok":
+                print("reselect profile:", d.request(d.idx["onboard"], 3, r[4:6])[0])  # setCurrentProfile
 
 
 def cmd_zone(args):
@@ -218,7 +223,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("claim"); s.add_argument("--no-sw-control", action="store_true"); s.set_defaults(f=cmd_claim)
-    sub.add_parser("release").set_defaults(f=cmd_release)
+    s = sub.add_parser("release"); s.add_argument("--reselect-profile", action="store_true"); s.set_defaults(f=cmd_release)
     s = sub.add_parser("zone"); s.add_argument("zone"); s.add_argument("color"); s.set_defaults(f=cmd_zone)
     sub.add_parser("echo").set_defaults(f=cmd_echo)
     s = sub.add_parser("fps")

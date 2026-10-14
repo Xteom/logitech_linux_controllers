@@ -62,7 +62,10 @@ detach the keyboard driver).
   etc.) changed. *Superseded by rung C:* the modifiers are zones `0x68-0x6f`,
   not `usage - 3`. Only `0x68` (left Ctrl) fell inside an accepted chunk,
   which explains the Ctrl ambiguity; `0x69-0x6f` sat in rejected chunks.
-- `restore` returns the keyboard to its onboard effect.
+- `restore` returns the keyboard to its onboard effect. *Correction (Gate A,
+  2026-10-13):* not reliably. After a host frame, onboard mode alone left the
+  last frame on the keys until a profile was re-selected (pressing M1/M2).
+  See [Corrections](#corrections-research--gate-a-2026-10-13).
 
 ### Rung C — key
 
@@ -72,7 +75,9 @@ detach the keyboard driver).
   rejected). A one-zone-at-a-time scan of `0x69-0xfe` found exactly 18 valid
   zones, and each group was confirmed visually:
   - `0x68-0x6f`: the 8 modifiers (Ctrl/Shift/Alt/Win/…), i.e. `usage - 0x78`
-  - `0x99, 0x9b-0x9e`: media keys
+  - `0x99, 0x9b-0x9e`: media keys. *Correction:* `0x99` is the backlight
+    (brightness) key; the media keys are `0x9b` play/pause, `0x9c` mute,
+    `0x9d` next, `0x9e` previous (Gate A).
   - `0xb4-0xb8`: G1-G5
   - `0xd2`: G logo
 - The full valid set is therefore `0x01-0x6f`, `0x99`, `0x9b-0x9e`,
@@ -102,6 +107,8 @@ detach the keyboard driver).
   indistinguishable from a fresh one, and 584 BUSY frames costing ~zero
   time fits (b) as well as (a). Which function (fn 6 or fn 7) got BUSY was
   not recorded. `latency` now counts BUSY instead of aborting.
+  *Resolved (2026-10-13): hypothesis (a).* See
+  [Corrections](#corrections-research--gate-a-2026-10-13).
 - At ~167 Hz the red/blue alternation is seen as steady magenta.
 - Typing during the run: works normally. In this keyboard mode, keystrokes
   did **not** appear on `/dev/hidraw2` (0 input reports while typing); they
@@ -118,9 +125,10 @@ detach the keyboard driver).
   0x8081, which sits at index 0x10 (discover via root getFeature, don't hardcode).
   Host mode (`0x8100` fn 1 = `02`) is set before painting, and `restore` (`01`)
   hands back to the onboard effect. Whether host mode is strictly
-  required was not isolated.
+  required was not isolated. *Corrected:* the release also needs a
+  profile re-select, and the claim sequence is now known (see below).
 - Key zones: `usage - 3` for the main block (`0x01-0x67`), modifiers
-  `0x68-0x6f` (`usage - 0x78`), media `0x99, 0x9b-0x9e`, G1-G5 `0xb4-0xb8`,
+  `0x68-0x6f` (`usage - 0x78`), backlight key `0x99`, media `0x9b-0x9e`, G1-G5 `0xb4-0xb8`,
   logo `0xd2`. Any invalid zone makes the device reject its whole 13-zone report,
   so paint only known-valid zones.
 - Budget: ~333 acknowledged reports/s when waiting for every reply. A
@@ -135,3 +143,38 @@ detach the keyboard driver).
   than treat them as fatal. It should also rotate the sw_id per request
   (1-15) and log which function got BUSY, to settle hypothesis (a) vs (b)
   above.
+
+## Corrections (research + Gate A, 2026-10-13)
+
+Sources:
+- **Gate A:** `experiments/g815_gate_a.py`. Results are in the "Gate A results" section of
+  `docs/superpowers/specs/2026-10-13-g815-wave-design.md`.
+- **Reference code:** OpenRGB's HID++ 2.0 controller and Solaar (`rgb_power.py`,
+  `settings_templates.py`). They were used as references only.
+
+- **Claim:** the claim sequence is `0x8071` fn 5 SetSWControl `[01 03 04]` plus host mode
+  `0x8100` fn 1 `[02]`; both returned ok. Colors held for 60 s even without
+  SetSWControl. The wave keeps it anyway, as Solaar does. `0x4522` (OpenRGB's
+  disable-keys handshake) is present but not needed.
+- **Release:**
+  1. `0x8071` fn 5 `[01 00 00]`;
+  2. `0x8100` fn 1 `[01]`;
+  3. **re-select the current profile:** `0x8100` fn 4 → 2 bytes (`00 01`), then fn 3 with them.
+
+  Without step 3, the keys keep the last host frame.
+- **BUSY is backpressure, from the device.** The Gate A probe rotated sw_ids 1-15 and
+  recorded the function and error of every non-ok reply. In 1,342 frames, every retry
+  was a BUSY (`0x08`) on **frameEnd** (fn 7), with 0 timeouts. That rules out stale
+  replies (hypothesis b). OpenRGB also treats BUSY on frameEnd as "wait and retry".
+- **Pipelining:** writes sent back-to-back are **silently dropped**. Of 6 writes with no
+  gap, only the last was acknowledged, and no error came back. With ≥ 1 ms between
+  writes, all are acknowledged, in order; 0.5 ms still drops writes. With 1 ms
+  pacing and up to 4 writes in flight, the full ripple ran at 32-38 committed fps
+  (≈ 17-20 writes per frame). Without pacing, it ran at 0 fps.
+- **Other write functions:** fn 1 (individual, 4 zones per report) and fn 5 (range,
+  3 ranges per report) both work. Replies echo only a prefix of the params: fn 1
+  and fn 5 echo byte 0, and fn 6 echoes bytes 0-3.
+- **Zone discovery:** `0x8081` fn 0 `[00 page 00]` (pages 0-2) returns a bitmap in
+  reply params 2-15 (`zone = page*112 + byte*8 + bit`). It reports exactly the
+  rung C set plus zone `0x00`. Zone `0x00` accepts writes but lights nothing.
+- **Ping:** root fn 1 `[00 00 ping]` echoes `ping` at reply params byte 2.

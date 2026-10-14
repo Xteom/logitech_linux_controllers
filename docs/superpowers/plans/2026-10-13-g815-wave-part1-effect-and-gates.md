@@ -1289,7 +1289,7 @@ def main():
     if (v.major_version, v.minor_version) < (2, 1):
         print("FAIL: server XI < 2.1")
         return 1
-    d.display.ge_add_event_data(opcode, RAW_KEY_PRESS, RawKeyEventData)
+    d.ge_add_event_data(opcode, RAW_KEY_PRESS, RawKeyEventData)  # method lives on Display, not d.display
     root = d.screen().root
     root.xinput_select_events([
         (xinput.AllMasterDevices, 1 << RAW_KEY_PRESS),

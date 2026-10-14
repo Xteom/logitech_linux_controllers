@@ -121,3 +121,28 @@ def test_garbage_request_gets_error_reply(tmp_path) -> None:
         stop.set()
         t.join(2)
         listener.close()
+
+
+def test_sigterm_never_interrupts_keyboard_io_and_releases(tmp_path) -> None:
+    # hidapi's read() fails with "read error" when a signal lands in its poll(), which
+    # looked like an unplug and skipped the release. The daemon must block SIGTERM/SIGINT
+    # in the I/O thread and take them on a dedicated thread instead.
+    import signal
+
+    conn = FakeConnector()
+    keys = FakeKeys()
+    seen = {}
+
+    def poll():
+        if "mask" not in seen:
+            seen["mask"] = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+            os.kill(os.getpid(), signal.SIGTERM)
+        return []
+
+    keys.poll = poll
+    before = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+    code = run_daemon(env=_env(tmp_path), make_keys=lambda: keys, make_connector=lambda: conn,
+                      lock_query=lambda: False, state_path=tmp_path / "wave.json")
+    assert code == 0 and conn.kb.released == 1
+    assert {signal.SIGTERM, signal.SIGINT} <= seen["mask"]
+    assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == before

@@ -34,6 +34,7 @@ LOCK_POLL = 1.0
 GDBUS = "/usr/bin/gdbus"
 SOCKET_NAME = "g815-wave.sock"
 LOCK_NAME = "g815-wave.lock"
+STOP_SIGNALS = {signal.SIGTERM, signal.SIGINT}
 ENV_HINT = "systemctl --user import-environment DISPLAY XAUTHORITY"
 
 
@@ -388,7 +389,8 @@ def run_daemon(
     watcher = LockWatcher(lock_query)
     listener = None
     daemon = None
-    previous: dict[int, object] = {}
+    old_mask: set[int] | None = None
+    waiter: threading.Thread | None = None
     try:
         from Xlib.error import ConnectionClosedError
 
@@ -402,11 +404,16 @@ def run_daemon(
         listener = bind_socket(rt / SOCKET_NAME)
         daemon = Daemon(make_connector(), keys, lambda: watcher.locked,
                         StateFile(state_path or default_state_path()))
+        if threading.current_thread() is threading.main_thread():
+            # A signal landing in hidapi's poll() makes read() fail with "read error", which
+            # looks like an unplug and would skip the release. So SIGTERM/SIGINT are blocked
+            # here (threads started below inherit the mask) and taken by sigwait instead.
+            old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+            waiter = threading.Thread(target=lambda: (signal.sigwait(STOP_SIGNALS), stop.set()),
+                                      name="signals", daemon=True)
+            waiter.start()
         watcher.locked = lock_query()
         watcher.start()
-        if threading.current_thread() is threading.main_thread():
-            for sig in (signal.SIGTERM, signal.SIGINT):
-                previous[sig] = signal.signal(sig, lambda *_: stop.set())
         log.info("wave daemon started (preset %s, %s)", daemon.preset, "off" if daemon.off else "on")
         try:
             serve(daemon, listener, stop, wake_fd=keys.fileno() if hasattr(keys, "fileno") else None)
@@ -414,8 +421,6 @@ def run_daemon(
             log.info("X session closed; exiting")
         return 0
     finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
         watcher.stop()
         if daemon is not None:
             daemon.shutdown()
@@ -423,3 +428,9 @@ def run_daemon(
             listener.close()
             (rt / SOCKET_NAME).unlink(missing_ok=True)
         os.close(lock_fd)
+        if waiter is not None:
+            if waiter.is_alive():
+                signal.pthread_kill(waiter.ident, signal.SIGTERM)   # wake sigwait so it exits
+            waiter.join(1)
+        if old_mask is not None:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)

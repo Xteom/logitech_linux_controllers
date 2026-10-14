@@ -14,13 +14,18 @@ import heapq
 
 from logitech_lighting.devices.g815.layout import KEYS, PHASE1_VALID_ZONES
 
-FEATURES = {0x8081: 0x10, 0x8071: 0x0F, 0x8100: 0x11}
-PERKEY, EFFECTS, ONBOARD = 0x10, 0x0F, 0x11
+FEATURES = {0x8081: 0x10, 0x8071: 0x0F, 0x8100: 0x11, 0x8010: 0x0A}   # as on the real G815
+PERKEY, EFFECTS, ONBOARD, GKEY = 0x10, 0x0F, 0x11, 0x0A
 DEVICE_ZONES = frozenset(PHASE1_VALID_ZONES) | {0x00}   # Gate A: zone 0 is reported too
 
 
 def ok_report(feat: int, fn: int, sw: int, params: bytes = b"") -> bytes:
     return bytes([0x11, 0xFF, feat, (fn << 4) | sw]) + bytes(params).ljust(16, b"\x00")
+
+
+def notify_report(feat: int, params: bytes) -> bytes:
+    """A device notification: function 0, software id 0 (e.g. G-key bitmask from 0x8010)."""
+    return ok_report(feat, 0, 0, params)
 
 
 def err_report(feat: int, fn: int, sw: int, code: int) -> bytes:
@@ -150,6 +155,7 @@ class FakeKb:
         self.control_ok = True
         self.needs_reclaim = False
         self.fail: Exception | None = None
+        self.gkeys: list[str] = []
 
     def send_frame(self, frame, resync=()):
         if self.fail:
@@ -158,6 +164,12 @@ class FakeKb:
             self.committed += 1
         self.frames.append(frame)
         return True
+
+    def poll_keys(self):
+        if self.fail:
+            raise self.fail
+        out, self.gkeys = self.gkeys, []
+        return out
 
     def check_control(self):
         return self.control_ok

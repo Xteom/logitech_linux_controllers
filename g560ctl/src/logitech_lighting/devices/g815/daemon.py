@@ -202,6 +202,11 @@ class Daemon:
             log.warning("lock state unknown (GNOME ScreenSaver not answering); rings paused")
         self._lock_warned = self.locked is None
         self._apply(now)
+        if self.kb is not None:
+            try:
+                presses += self.kb.poll_keys()      # G-keys arrive as HID++ notifications
+            except DeviceGone as exc:
+                self._lost(exc, now)
         if self.state is State.ACTIVE:
             for name in presses:
                 self.ripple.press(name, now)

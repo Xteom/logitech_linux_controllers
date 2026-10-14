@@ -123,6 +123,7 @@ class Sender:
         self._clean_frames = 0
         self._busy_per_zone = 0.0
         self.dropped = 0          # reports that matched no open entry
+        self.on_notify: Callable[[Reply], None] | None = None   # device notifications (sw_id 0)
 
     # -- ids and raw I/O ---------------------------------------------------
 
@@ -170,6 +171,10 @@ class Sender:
         return entry
 
     def _dispatch(self, r: Reply) -> _Entry | None:
+        if r.sw == 0 and not r.error:         # requests never use sw_id 0: a notification
+            if self.on_notify is not None:
+                self.on_notify(r)
+            return None
         for entry in self._open.values():
             if entry.matches(r):
                 del self._open[entry.sw]
@@ -195,6 +200,11 @@ class Sender:
             r = self._read(left)
             if r is not None and self._dispatch(r) is entry:
                 return r
+
+    def poll(self) -> None:
+        """Read whatever is already waiting (notifications arrive even while idle)."""
+        while (r := self._read(0.001)) is not None:
+            self._dispatch(r)
 
     # -- fence and control path --------------------------------------------
 

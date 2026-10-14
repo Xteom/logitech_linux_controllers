@@ -3,6 +3,8 @@
 Byte sequences verified on hardware in Gate A (see the spec's "Gate A results"):
   claim    0x8071 fn5 [01 03 04], 0x8100 fn1 [02], 0x8081 fn0 [00 page 00] for pages 0-2
   release  0x8071 fn5 [01 00 00], 0x8100 fn1 [01], 0x8100 fn4 -> profile, 0x8100 fn3 [profile]
+  G-keys   0x8010 fn2 [01] diverts them (Solaar "Divert G and M Keys"); each change then arrives
+           as a notification `11 ff <gkey idx> 00 <bitmask>` (G1 = bit 0 ... G5 = bit 4); [00] undoes it
 """
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ import time
 from typing import Callable
 
 from logitech_lighting.devices.g815.frame import FN_SET_INDIVIDUAL, FN_SET_RANGE, Write, encode
-from logitech_lighting.devices.g815.hidpp import DeviceGone, Port, RequestFailed, Sender
+from logitech_lighting.devices.g815.hidpp import DeviceGone, Port, Reply, RequestFailed, Sender
 from logitech_lighting.devices.g815.layout import BY_ZONE
 from logitech_lighting.devices.g815.presets import Color
 
@@ -21,7 +23,7 @@ VID, PID = 0x046D, 0xC33F
 USAGE_PAGE, USAGE = 0xFF43, 0x0602
 
 ROOT = 0x00
-PERKEY, EFFECTS, ONBOARD = 0x8081, 0x8071, 0x8100
+PERKEY, EFFECTS, ONBOARD, GKEY = 0x8081, 0x8071, 0x8100, 0x8010
 SW_ACTIVE = bytes([0x01, 0x03, 0x04])
 SW_RELEASE = bytes([0x01, 0x00, 0x00])
 MODE_ONBOARD, MODE_HOST = 0x01, 0x02
@@ -60,11 +62,14 @@ class Keyboard:
     def __init__(self, sender: Sender) -> None:
         self.sender = sender
         self.idx: dict[int, int] = {}
-        self.applied: set[str] = set()          # "sw" (SetSWControl), "host" (onboard mode 02)
+        self.applied: set[str] = set()          # "sw" (SetSWControl), "host" (mode 02), "gkeys" (diverted)
         self.valid: frozenset[int] = frozenset()
         self.confirmed: dict[int, Color] | None = None
         self.abandoned = 0                      # consecutive abandoned frames
         self.committed = 0                      # frames acknowledged by frameEnd
+        self._gmask = 0
+        self._gkeys: list[str] = []
+        sender.on_notify = self._on_notify
 
     @property
     def needs_reclaim(self) -> bool:
@@ -72,7 +77,7 @@ class Keyboard:
 
     def discover(self) -> dict[int, int]:
         self.idx = {}
-        for fid in (PERKEY, EFFECTS, ONBOARD):
+        for fid in (PERKEY, EFFECTS, ONBOARD, GKEY):
             index = self.sender.request(ROOT, 0, fid.to_bytes(2, "big"))[0]
             if index:
                 self.idx[fid] = index
@@ -93,6 +98,9 @@ class Keyboard:
             if ONBOARD in self.idx:
                 self.sender.request(self.idx[ONBOARD], 1, bytes([MODE_HOST]))
                 self.applied.add("host")
+            if GKEY in self.idx:
+                self.sender.request(self.idx[GKEY], 2, b"\x01")
+                self.applied.add("gkeys")
             zones: set[int] = set()
             for page in range(3):
                 zones |= parse_zone_page(page, self.sender.request(self.idx[PERKEY], 0, bytes([0, page, 0])))
@@ -112,6 +120,8 @@ class Keyboard:
     def _undo(self) -> None:
         """Best effort, only what the claim applied. Order verified in Gate A."""
         try:
+            if "gkeys" in self.applied:
+                self.sender.request(self.idx[GKEY], 2, b"\x00")
             if "sw" in self.applied:
                 self.sender.request(self.idx[EFFECTS], 5, SW_RELEASE)
             if "host" in self.applied:
@@ -146,6 +156,19 @@ class Keyboard:
             return True
         self.confirmed = None
         return False
+
+    def _on_notify(self, r: Reply) -> None:
+        if GKEY in self.idx and r.feat == self.idx[GKEY]:
+            mask = r.params[0]
+            pressed = mask & ~self._gmask
+            self._gmask = mask
+            self._gkeys += [f"g{bit + 1}" for bit in range(5) if pressed >> bit & 1]
+
+    def poll_keys(self) -> list[str]:
+        """G-key presses (as layout names g1..g5) since the last call."""
+        self.sender.poll()
+        keys, self._gkeys = self._gkeys, []
+        return keys
 
     def check_control(self) -> bool:
         """The 10 s check. False means control was lost and the caller must re-claim.

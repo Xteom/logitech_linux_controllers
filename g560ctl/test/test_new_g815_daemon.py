@@ -220,3 +220,17 @@ def test_failed_reclaim_goes_disconnected_and_retries(tmp_path) -> None:
     conn.kb.control_ok = True
     d.tick(10.0 + CONTROL_CHECK + CLAIM_BACKOFF[0])
     assert d.state is State.ACTIVE
+
+
+def test_gkey_presses_ripple_when_active(tmp_path) -> None:
+    d, conn, _, lock = _daemon(tmp_path)
+    d.tick(10.0)
+    conn.kb.gkeys = ["g3"]
+    d.tick(10.02)
+    d.tick(10.04)
+    assert conn.kb.frames[-1][BY_NAME["g3"].zone] == PRESETS["red"].stops[0]
+    lock["value"] = True
+    d.tick(10.06)
+    conn.kb.gkeys = ["g1"]
+    d.tick(10.08)
+    assert set(conn.kb.frames[-1].values()) == {BASE}

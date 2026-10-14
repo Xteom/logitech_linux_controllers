@@ -193,3 +193,27 @@ def test_oserror_and_minus_one_mean_device_gone() -> None:
     with pytest.raises(DeviceGone) as exc:
         s.send_writes(PK, _writes(1), ECHO)
     assert exc.value.io_error
+
+
+def test_notifications_go_to_handler_not_dropped() -> None:
+    from g815_fakes import notify_report
+
+    s, port, _ = _sender()
+    seen = []
+    s.on_notify = seen.append
+    port.schedule(0.0, notify_report(0x0A, b"\x04"), counts=False)
+    assert s.request(0x00, 0, (0x8081).to_bytes(2, "big"))[0] == 0x10
+    assert [(r.feat, r.params[0]) for r in seen] == [(0x0A, 0x04)]
+    assert s.dropped == 0
+
+
+def test_poll_reads_notifications_while_idle() -> None:
+    from g815_fakes import notify_report
+
+    s, port, _ = _sender()
+    seen = []
+    s.on_notify = seen.append
+    port.schedule(0.0, notify_report(0x0A, b"\x01"), counts=False)
+    port.schedule(0.0, notify_report(0x0A, b"\x00"), counts=False)
+    s.poll()
+    assert [r.params[0] for r in seen] == [0x01, 0x00]

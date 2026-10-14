@@ -1,6 +1,6 @@
 import pytest
 
-from g815_fakes import EFFECTS, ONBOARD, PERKEY, FakeClock, FakeKeyboardPort, ok_report
+from g815_fakes import EFFECTS, GKEY, ONBOARD, PERKEY, FakeClock, FakeKeyboardPort, notify_report, ok_report
 from logitech_lighting.devices.g815.hidpp import DeviceGone, Sender
 from logitech_lighting.devices.g815.keyboard import (
     ClaimError, Connector, Keyboard, parse_zone_page, usable_zones,
@@ -42,11 +42,12 @@ def test_usable_zones_drops_zone_0_and_unknown_zones() -> None:
 def test_claim_byte_sequence() -> None:
     kb, port, _ = _keyboard()
     kb.claim(BASE_FRAME)
-    head = port.log[:8]
-    assert head[:3] == [(0, 0, (f).to_bytes(2, "big").ljust(16, b"\x00")) for f in (0x8081, 0x8071, 0x8100)]
-    assert head[3] == (EFFECTS, 5, bytes([1, 3, 4]).ljust(16, b"\x00"))
-    assert head[4] == (ONBOARD, 1, bytes([2]).ljust(16, b"\x00"))
-    assert [p[:3] for f, n, p in head[5:8]] == [bytes([0, page, 0]) for page in range(3)]
+    head = port.log[:10]
+    assert head[:4] == [(0, 0, (f).to_bytes(2, "big").ljust(16, b"\x00")) for f in (0x8081, 0x8071, 0x8100, 0x8010)]
+    assert head[4] == (EFFECTS, 5, bytes([1, 3, 4]).ljust(16, b"\x00"))
+    assert head[5] == (ONBOARD, 1, bytes([2]).ljust(16, b"\x00"))
+    assert head[6] == (GKEY, 2, bytes([1]).ljust(16, b"\x00"))          # divert G-keys
+    assert [p[:3] for f, n, p in head[7:10]] == [bytes([0, page, 0]) for page in range(3)]
     assert port.log[-1][:2] == (PERKEY, 7)
     assert kb.valid == frozenset(BY_ZONE) and _painted(port) == set(BY_ZONE)
     assert kb.confirmed == BASE_FRAME and port.mode == 2
@@ -58,6 +59,7 @@ def test_release_reselects_profile() -> None:
     n = len(port.log)
     kb.release()
     assert port.log[n:] == [
+        (GKEY, 2, bytes([0]).ljust(16, b"\x00")),
         (EFFECTS, 5, bytes([1, 0, 0]).ljust(16, b"\x00")),
         (ONBOARD, 1, bytes([1]).ljust(16, b"\x00")),
         (ONBOARD, 4, bytes(16)),
@@ -71,7 +73,7 @@ def test_partial_claim_rolls_back() -> None:
     port.faults[(PERKEY, 0)] = ["error"]
     with pytest.raises(ClaimError):
         kb.claim(BASE_FRAME)
-    assert [(f, n) for f, n, _ in port.log[-4:]] == [(EFFECTS, 5), (ONBOARD, 1), (ONBOARD, 4), (ONBOARD, 3)]
+    assert [(f, n) for f, n, _ in port.log[-5:]] == [(GKEY, 2), (EFFECTS, 5), (ONBOARD, 1), (ONBOARD, 4), (ONBOARD, 3)]
     assert port.mode == 1 and not kb.applied
 
 
@@ -190,3 +192,19 @@ def test_io_error_counts_as_reenumeration() -> None:
     c.drop(DeviceGone("read failed", io_error=True))
     c.connect(BASE_FRAME)
     assert not c.quarantine
+
+
+def test_gkey_presses_become_key_names_on_press_edges() -> None:
+    kb, port, _ = _keyboard()
+    kb.claim(BASE_FRAME)
+    for mask in (0x01, 0x00, 0x04, 0x14, 0x10, 0x00):          # G1; G3, then G5 while G3 held
+        port.schedule(0.0, notify_report(GKEY, bytes([mask])), counts=False)
+    assert kb.poll_keys() == ["g1", "g3", "g5"]
+    assert kb.poll_keys() == []
+
+
+def test_no_gkey_feature_means_no_divert() -> None:
+    kb, port, _ = _keyboard(features={0x8081: 0x10, 0x8071: 0x0F, 0x8100: 0x11})
+    kb.claim(BASE_FRAME)
+    kb.release()
+    assert not port.requests(GKEY)

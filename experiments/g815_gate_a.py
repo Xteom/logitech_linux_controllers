@@ -17,7 +17,8 @@ from logitech_lighting.devices.g815.presets import BASE, PRESETS
 from logitech_lighting.devices.g815.ripple import Ripple
 
 VID, PID = 0x046D, 0xC33F
-FEATURES = {"root": 0x0000, "perkey": 0x8081, "effects": 0x8071, "onboard": 0x8100, "disable_keys": 0x4522}
+FEATURES = {"root": 0x0000, "perkey": 0x8081, "effects": 0x8071, "onboard": 0x8100, "disable_keys": 0x4522,
+            "gkey": 0x8010, "mkeys": 0x8020}
 SW_ACTIVE, SW_RELEASE = bytes([0x01, 0x03, 0x04]), bytes([0x01, 0x00, 0x00])
 
 
@@ -149,6 +150,29 @@ def cmd_echo(args):
     d.request(pk, FN_FRAME_END, b"\x00")
 
 
+def cmd_gkeys(args):
+    """Divert G/M keys (0x8010 fn2 [01], as Solaar's "Divert G and M Keys") and print
+    only reports from the GKey/MKeys features; undo the diversion at the end."""
+    d = Dev()
+    print("features:", {k: (hex(v) if v is not None else None) for k, v in d.discover().items()})
+    if not d.idx["gkey"]:
+        print("no 0x8010 GKey feature")
+        return
+    print("divert on:", d.request(d.idx["gkey"], 2, b"\x01")[0])
+    watch = {d.idx["gkey"]: "gkey", d.idx["mkeys"]: "mkeys"}
+    other, end = 0, time.monotonic() + args.seconds
+    print(f"press G1..G5 and M1..M3 now ({args.seconds:.0f} s)")
+    while time.monotonic() < end:
+        r = d.read(100)
+        if r is None:
+            continue
+        if r[2] in watch:
+            print(f"  {watch[r[2]]}: {r[:12].hex(' ')}")
+        else:
+            other += 1
+    print("divert off:", d.request(d.idx["gkey"], 2, b"\x00")[0], f"(other reports ignored: {other})")
+
+
 def cmd_fps(args):
     d = Dev()
     d.discover()
@@ -226,6 +250,7 @@ def main(argv=None):
     s = sub.add_parser("release"); s.add_argument("--reselect-profile", action="store_true"); s.set_defaults(f=cmd_release)
     s = sub.add_parser("zone"); s.add_argument("zone"); s.add_argument("color"); s.set_defaults(f=cmd_zone)
     sub.add_parser("echo").set_defaults(f=cmd_echo)
+    s = sub.add_parser("gkeys"); s.add_argument("--seconds", type=float, default=20.0); s.set_defaults(f=cmd_gkeys)
     s = sub.add_parser("fps")
     s.add_argument("--seconds", type=float, default=10.0)
     s.add_argument("--rate", type=float, default=12.0)

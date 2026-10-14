@@ -91,8 +91,10 @@ it from anywhere:
 - **States:**
   - `off`: you chose off.
   - `disconnected`: keyboard absent; it is polled every 2 s.
-  - `locked`: screen locked or lock state unknown; base color only, no rings.
   - `active`: rings live.
+- **Keys:** every key starts a ring, the G-keys (G1-G5) included, and so does the lock
+  screen. While the wave is on, the G-keys and the M keys do nothing else; they work
+  normally again after `ligths wave off`.
 - **Choice storage:** your choice is kept in `~/.config/logitech-lighting/wave.json`.
 - **Code and design:**
   - Code: `g560ctl/src/logitech_lighting/devices/g815/`.

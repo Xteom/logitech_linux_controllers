@@ -14,7 +14,7 @@ from logitech_lighting.devices.g815.wave_cli import NOT_RUNNING, send_command
 
 
 def _daemon(tmp_path):
-    return Daemon(FakeConnector(), FakeKeys(), lambda: False, StateFile(tmp_path / "wave.json"))
+    return Daemon(FakeConnector(), FakeKeys(), StateFile(tmp_path / "wave.json"))
 
 
 def _serving(tmp_path):
@@ -94,7 +94,7 @@ def test_x_connection_loss_releases_and_exits_0(tmp_path) -> None:
 
     keys.poll = poll
     code = run_daemon(env=_env(tmp_path), make_keys=lambda: keys, make_connector=lambda: conn,
-                      lock_query=lambda: False, state_path=tmp_path / "wave.json")
+                      state_path=tmp_path / "wave.json")
     assert code == 0 and conn.kb.released == 1
     assert not (tmp_path / dmod.SOCKET_NAME).exists()
 
@@ -142,7 +142,7 @@ def test_sigterm_never_interrupts_keyboard_io_and_releases(tmp_path) -> None:
     keys.poll = poll
     before = signal.pthread_sigmask(signal.SIG_BLOCK, [])
     code = run_daemon(env=_env(tmp_path), make_keys=lambda: keys, make_connector=lambda: conn,
-                      lock_query=lambda: False, state_path=tmp_path / "wave.json")
+                      state_path=tmp_path / "wave.json")
     assert code == 0 and conn.kb.released == 1
     assert {signal.SIGTERM, signal.SIGINT} <= seen["mask"]
     assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == before

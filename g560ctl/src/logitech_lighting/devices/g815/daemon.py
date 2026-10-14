@@ -1,4 +1,4 @@
-"""The wave daemon: frame loop, control socket, state file, lock-screen watch, reconnect."""
+"""The wave daemon: frame loop, control socket, state file, reconnect."""
 from __future__ import annotations
 
 import collections
@@ -9,7 +9,6 @@ import os
 import selectors
 import signal
 import socket
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -30,8 +29,6 @@ FRAME_INTERVAL = 1 / 60
 CONTROL_CHECK = 10.0
 RECONNECT_POLL = 2.0
 CLAIM_BACKOFF = (2.0, 4.0, 8.0, 16.0, 30.0)
-LOCK_POLL = 1.0
-LOGINCTL = "/usr/bin/loginctl"
 SOCKET_NAME = "g815-wave.sock"
 LOCK_NAME = "g815-wave.lock"
 STOP_SIGNALS = {signal.SIGTERM, signal.SIGINT}
@@ -84,56 +81,15 @@ class StateFile:
         tmp.replace(self.path)
 
 
-def query_lock(run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-               uid: int | None = None) -> bool | None:
-    """logind LockedHint of the user's graphical session: True/False, or None when unknown
-    (treated as locked). GNOME's ScreenSaver.GetActive was unreliable on this machine."""
-    uid = os.getuid() if uid is None else uid
-    try:
-        user = run([LOGINCTL, "show-user", str(uid), "-p", "Display", "--value"],
-                   capture_output=True, text=True, timeout=0.5)
-        session = user.stdout.strip()
-        if user.returncode != 0 or not session:
-            return None
-        out = run([LOGINCTL, "show-session", session, "-p", "LockedHint", "--value"],
-                  capture_output=True, text=True, timeout=0.5)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if out.returncode != 0:
-        return None
-    return {"yes": True, "no": False}.get(out.stdout.strip())
-
-
-class LockWatcher(threading.Thread):
-    """Polls the lock state off the frame loop, so a slow gdbus never stalls frames."""
-
-    def __init__(self, query: Callable[[], bool | None] = query_lock, interval: float = LOCK_POLL) -> None:
-        super().__init__(name="lock-watch", daemon=True)
-        self._query = query
-        self._interval = interval
-        self._stop = threading.Event()
-        self.locked: bool | None = None
-
-    def run(self) -> None:
-        while not self._stop.is_set():
-            self.locked = self._query()
-            self._stop.wait(self._interval)
-
-    def stop(self) -> None:
-        self._stop.set()
-
-
 class Daemon:
     def __init__(
         self,
         connector: Connector,
         keys,                                   # .poll() -> list[str] of key names
-        lock_state: Callable[[], bool | None],
         state_file: StateFile,
     ) -> None:
         self.connector = connector
         self.keys = keys
-        self.lock_state = lock_state
         self.state_file = state_file
         self.preset, self.off = state_file.load()
         self.ripple = Ripple(preset=PRESETS[self.preset])
@@ -141,8 +97,6 @@ class Daemon:
         self.kb: Keyboard | None = None
         self.rotor: ResyncRotor | None = None
         self.state = State.OFF if self.off else State.DISCONNECTED
-        self.locked: bool | None = None
-        self._lock_warned = False
         self._next_connect = 0.0
         self._backoff = 0
         self._last_check = 0.0
@@ -183,7 +137,6 @@ class Daemon:
             "preset": self.preset,
             "state": self.state.value,
             "connected": self.kb is not None,
-            "lock": "unknown" if self.locked is None else ("locked" if self.locked else "unlocked"),
             "fps": round(self.fps(), 1),
         }
 
@@ -203,10 +156,6 @@ class Daemon:
 
     def tick(self, now: float) -> None:
         presses = self.keys.poll()                  # X connection loss propagates to run_daemon
-        self.locked = self.lock_state()
-        if self.locked is None and not self._lock_warned:
-            log.warning("lock state unknown (logind LockedHint unavailable); rings paused")
-        self._lock_warned = self.locked is None
         self._apply(now)
         if self.kb is not None:
             try:
@@ -216,16 +165,16 @@ class Daemon:
         if self.state is State.ACTIVE:
             for name in presses:
                 self.ripple.press(name, now)
-        if self.state in (State.LOCKED, State.ACTIVE):
+        if self.state is State.ACTIVE:
             self._frame(now)
         elif self.state is State.DISCONNECTED and now >= self._next_connect:
             self._connect(now)
             self._apply(now)
-            if self.state in (State.LOCKED, State.ACTIVE):
+            if self.state is State.ACTIVE:
                 self._frame(now)
 
     def _apply(self, now: float) -> None:
-        new = decide(self.off, self.kb is not None, self.locked)
+        new = decide(self.off, self.kb is not None)
         if new is self.state:
             return
         fx = effects(self.state, new)
@@ -383,7 +332,6 @@ def run_daemon(
     env: dict[str, str] | os._Environ = os.environ,
     make_keys: Callable[[], object] | None = None,
     make_connector: Callable[[], Connector] = Connector,
-    lock_query: Callable[[], bool | None] = query_lock,
     state_path: Path | None = None,
     stop: threading.Event | None = None,
 ) -> int:
@@ -397,7 +345,6 @@ def run_daemon(
         print("g815 wave daemon already running")
         return 1
     stop = stop or threading.Event()
-    watcher = LockWatcher(lock_query)
     listener = None
     daemon = None
     old_mask: set[int] | None = None
@@ -413,8 +360,7 @@ def run_daemon(
             log.error("%s", exc)
             return 1
         listener = bind_socket(rt / SOCKET_NAME)
-        daemon = Daemon(make_connector(), keys, lambda: watcher.locked,
-                        StateFile(state_path or default_state_path()))
+        daemon = Daemon(make_connector(), keys, StateFile(state_path or default_state_path()))
         if threading.current_thread() is threading.main_thread():
             # A signal landing in hidapi's poll() makes read() fail with "read error", which
             # looks like an unplug and would skip the release. So SIGTERM/SIGINT are blocked
@@ -423,8 +369,6 @@ def run_daemon(
             waiter = threading.Thread(target=lambda: (signal.sigwait(STOP_SIGNALS), stop.set()),
                                       name="signals", daemon=True)
             waiter.start()
-        watcher.locked = lock_query()
-        watcher.start()
         log.info("wave daemon started (preset %s, %s)", daemon.preset, "off" if daemon.off else "on")
         try:
             serve(daemon, listener, stop, wake_fd=keys.fileno() if hasattr(keys, "fileno") else None)
@@ -432,7 +376,6 @@ def run_daemon(
             log.info("X session closed; exiting")
         return 0
     finally:
-        watcher.stop()
         if daemon is not None:
             daemon.shutdown()
         if listener is not None:

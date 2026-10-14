@@ -47,3 +47,9 @@ def test_lookup_tables_agree() -> None:
         assert BY_ZONE[k.zone] is k and BY_NAME[k.name] is k
         if k.evdev is not None:
             assert BY_EVDEV[k.evdev] is k
+
+
+def test_backlight_key_sits_above_f6() -> None:
+    # Confirmed by the user on the keyboard (2026-10-14): the brightness key is above F6.
+    backlight, f6 = BY_NAME["backlight"], BY_NAME["f6"]
+    assert backlight.x == f6.x and backlight.y < f6.y

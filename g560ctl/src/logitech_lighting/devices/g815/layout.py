@@ -77,7 +77,7 @@ _EXTRA_KEYS = [
     ("g1", 0xB4, None, 0.5, 1.25), ("g2", 0xB5, None, 0.5, 2.25), ("g3", 0xB6, None, 0.5, 3.25),
     ("g4", 0xB7, None, 0.5, 4.25), ("g5", 0xB8, None, 0.5, 5.25),
     ("logo", 0xD2, None, 0.5, 0.0),
-    ("backlight", 0x99, None, _X0 + 15.75, -1.0),
+    ("backlight", 0x99, None, _X0 + 8.0, -1.0),   # above F6 (user-confirmed)
     ("media_play", 0x9B, 164, _X0 + 19.0, -1.0), ("media_mute", 0x9C, 113, _X0 + 20.0, -1.0),
     ("media_next", 0x9D, 163, _X0 + 21.0, -1.0), ("media_prev", 0x9E, 165, _X0 + 22.0, -1.0),
 ]

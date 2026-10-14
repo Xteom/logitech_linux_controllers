@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import heapq
 
-from logitech_lighting.devices.g815.layout import PHASE1_VALID_ZONES
+from logitech_lighting.devices.g815.layout import KEYS, PHASE1_VALID_ZONES
 
 FEATURES = {0x8081: 0x10, 0x8071: 0x0F, 0x8100: 0x11}
 PERKEY, EFFECTS, ONBOARD = 0x10, 0x0F, 0x11
@@ -137,3 +137,65 @@ class FakeKeyboardPort:
 
     def close(self) -> None:
         self.closed = True
+
+
+# -- daemon doubles (a claimed keyboard, the connector, the X key source) --
+
+class FakeKb:
+    def __init__(self) -> None:
+        self.valid = frozenset(k.zone for k in KEYS)
+        self.frames: list[dict] = []
+        self.committed = 0
+        self.released = 0
+        self.control_ok = True
+        self.needs_reclaim = False
+        self.fail: Exception | None = None
+
+    def send_frame(self, frame, resync=()):
+        if self.fail:
+            raise self.fail
+        if not self.frames or self.frames[-1] != frame:
+            self.committed += 1
+        self.frames.append(frame)
+        return True
+
+    def check_control(self):
+        return self.control_ok
+
+    def release(self):
+        self.released += 1
+
+
+class FakeConnector:
+    def __init__(self) -> None:
+        self.kb = FakeKb()
+        self.connects = 0
+        self.reclaims = 0
+        self.drops: list = []
+        self.error: Exception | None = None
+
+    def connect(self, frame):
+        self.connects += 1
+        if self.error:
+            raise self.error
+        self.kb.frames.append(frame)
+        return self.kb
+
+    def reclaim(self, frame):
+        self.reclaims += 1
+        return self.connect(frame)
+
+    def drop(self, error=None):
+        self.drops.append(error)
+
+
+class FakeKeys:
+    def __init__(self) -> None:
+        self.pending: list[str] = []
+        self.raise_on_poll: Exception | None = None
+
+    def poll(self):
+        if self.raise_on_poll:
+            raise self.raise_on_poll
+        out, self.pending = self.pending, []
+        return out

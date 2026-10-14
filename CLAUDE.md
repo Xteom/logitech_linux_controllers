@@ -82,7 +82,7 @@ passes any other arguments straight to this repo's `./lights`, e.g.
 
 The **Logitech G815** keyboard (`046d:c33f`) gets a reactive effect: every key
 press sends a ring of light across the keyboard over a dark indigo base
-(`#140028`). A systemd **user** service, `g815-wave`, runs it from login. Switch
+(`#1e003c`). A systemd **user** service, `g815-wave`, runs it from login. Switch
 it from anywhere:
 
 | Command | Effect |

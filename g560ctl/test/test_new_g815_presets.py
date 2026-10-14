@@ -5,7 +5,7 @@ from logitech_lighting.devices.g815.presets import (
 
 
 def test_base_and_preset_stops() -> None:
-    assert BASE == (0x14, 0x00, 0x28)
+    assert BASE == (0x1E, 0x00, 0x3C)   # #1e003c, brightened from #140028 (user, 2026-10-14)
     assert PRESETS["red"].stops == ((255, 255, 255), (0xFF, 0x2A, 0x2A), (0xB0, 0x00, 0x5A))
     assert PRESETS["blue"].stops == ((255, 255, 255), (0x33, 0xCC, 0xFF), (0x1F, 0x4F, 0xFF))
 

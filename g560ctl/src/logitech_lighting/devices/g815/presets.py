@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 Color = tuple[int, int, int]
 
-BASE: Color = (0x14, 0x00, 0x28)
+BASE: Color = (0x1E, 0x00, 0x3C)   # #1e003c
 U_STEPS = 8
 INTENSITY_STEPS = 16
 

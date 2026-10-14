@@ -115,23 +115,36 @@ class Keyboard:
         except (RequestFailed, ClaimError) as exc:
             self._undo()
             raise ClaimError(str(exc)) from exc
+        except DeviceGone as exc:
+            if not exc.io_error:            # still reachable (e.g. ids ran out): don't leave host mode on
+                self.release()
+            raise
         self.abandoned = 0
 
     def _undo(self) -> None:
-        """Best effort, only what the claim applied. Order verified in Gate A."""
+        """Best effort, only what the claim applied, in the order verified in Gate A. A failed
+        step does not stop the later ones; DeviceGone (nothing left to talk to) does."""
+        steps = []
+        if "gkeys" in self.applied:
+            steps.append(("G-key undivert", lambda: self.sender.request(self.idx[GKEY], 2, b"\x00")))
+        if "sw" in self.applied:
+            steps.append(("SW control off", lambda: self.sender.request(self.idx[EFFECTS], 5, SW_RELEASE)))
+        if "host" in self.applied:
+            steps.append(("onboard mode", lambda: self.sender.request(self.idx[ONBOARD], 1, bytes([MODE_ONBOARD]))))
+            steps.append(("profile reselect", self._reselect_profile))   # makes the onboard effect reappear
         try:
-            if "gkeys" in self.applied:
-                self.sender.request(self.idx[GKEY], 2, b"\x00")
-            if "sw" in self.applied:
-                self.sender.request(self.idx[EFFECTS], 5, SW_RELEASE)
-            if "host" in self.applied:
-                self.sender.request(self.idx[ONBOARD], 1, bytes([MODE_ONBOARD]))
-                profile = self.sender.request(self.idx[ONBOARD], 4)[:2]
-                self.sender.request(self.idx[ONBOARD], 3, profile)   # makes the onboard effect reappear
-        except RequestFailed as exc:
-            log.warning("release step failed: %s", exc)
-        self.applied = set()
-        self.confirmed = None
+            for name, step in steps:
+                try:
+                    step()
+                except RequestFailed as exc:
+                    log.warning("release step %s failed: %s", name, exc)
+        finally:
+            self.applied = set()
+            self.confirmed = None
+
+    def _reselect_profile(self) -> None:
+        profile = self.sender.request(self.idx[ONBOARD], 4)[:2]
+        self.sender.request(self.idx[ONBOARD], 3, profile)
 
     def release(self) -> None:
         try:
@@ -141,6 +154,10 @@ class Keyboard:
 
     def send_frame(self, frame: dict[int, Color], resync: tuple[int, ...] = ()) -> bool:
         """Send the changed zones, then frameEnd. True when the frame is committed (or empty)."""
+        # Resync zones ride only on frames that already change something: an idle keyboard
+        # gets no traffic (the 10 s full repaint covers drift while idle).
+        if not encode(self.confirmed, frame, self.valid):
+            return True
         writes = encode(self.confirmed, frame, self.valid, resync)
         if not writes:
             return True

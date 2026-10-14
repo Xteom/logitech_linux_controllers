@@ -208,3 +208,30 @@ def test_no_gkey_feature_means_no_divert() -> None:
     kb.claim(BASE_FRAME)
     kb.release()
     assert not port.requests(GKEY)
+
+
+def test_release_continues_after_a_failed_step() -> None:
+    kb, port, _ = _keyboard()
+    kb.claim(BASE_FRAME)
+    n = len(port.log)
+    port.faults[(GKEY, 2)] = ["error"]                          # undivert fails
+    kb.release()
+    assert [(f, fn) for f, fn, _ in port.log[n:]] == [
+        (GKEY, 2), (EFFECTS, 5), (ONBOARD, 1), (ONBOARD, 4), (ONBOARD, 3)]
+    assert port.mode == 1
+
+
+def test_claim_rolls_back_when_ids_run_out_mid_claim() -> None:
+    kb, port, _ = _keyboard()
+    kb.sender.quarantine.update(range(1, 14))                   # 2 ids left: frame path refuses
+    with pytest.raises(DeviceGone):
+        kb.claim(BASE_FRAME)
+    assert port.mode == 1 and port.profile_selects == 1 and not kb.applied
+
+
+def test_idle_frame_sends_nothing_even_with_resync_zones() -> None:
+    kb, port, _ = _keyboard()
+    kb.claim(BASE_FRAME)
+    n = len(port.log)
+    assert kb.send_frame(BASE_FRAME, resync=(1, 2, 3))
+    assert port.log[n:] == []

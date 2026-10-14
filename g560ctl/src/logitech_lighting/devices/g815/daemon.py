@@ -108,7 +108,7 @@ class Daemon:
         cmd = req.get("cmd")
         if cmd == "preset":
             name = req.get("name")
-            if name not in PRESETS:
+            if not isinstance(name, str) or name not in PRESETS:
                 return {"ok": False, "error": f"unknown preset {name!r}; choose one of: {', '.join(sorted(PRESETS))}"}
             if self.off:
                 self._next_connect, self._backoff = now, 0     # leaving OFF: connect at once

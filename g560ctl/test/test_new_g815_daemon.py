@@ -194,3 +194,9 @@ def test_gkey_presses_ripple_when_active(tmp_path) -> None:
     d.tick(10.02)
     d.tick(10.04)
     assert conn.kb.frames[-1][BY_NAME["g3"].zone] == PRESETS["blue"].stops[0]
+
+
+@pytest.mark.parametrize("req", [{"cmd": "preset", "name": []}, {"cmd": "preset", "name": {}}, {"cmd": ["x"]}])
+def test_badly_typed_requests_get_error_replies(tmp_path, req) -> None:
+    d, _, _ = _daemon(tmp_path)
+    assert d.handle(req, 1.0)["ok"] is False

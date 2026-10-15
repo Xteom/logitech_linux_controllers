@@ -10,7 +10,7 @@ from logitech_lighting.devices.g815 import daemon as dmod
 from logitech_lighting.devices.g815.daemon import (
     Daemon, StateFile, acquire_lock, bind_socket, run_daemon, serve,
 )
-from logitech_lighting.devices.g815.wave_cli import NOT_RUNNING, send_command
+from logitech_lighting.devices.g815.wave_cli import NOT_RUNNING, format_status, send_command
 
 
 def _daemon(tmp_path):
@@ -146,3 +146,11 @@ def test_sigterm_never_interrupts_keyboard_io_and_releases(tmp_path) -> None:
     assert code == 0 and conn.kb.released == 1
     assert {signal.SIGTERM, signal.SIGINT} <= seen["mask"]
     assert signal.pthread_sigmask(signal.SIG_BLOCK, []) == before
+
+
+def test_status_shows_why_the_keyboard_is_not_claimed() -> None:
+    reply = {"preset": "blue", "state": "disconnected", "connected": False, "fps": 0.0,
+             "reason": "only 2 HID++ software ids left"}
+    assert "keyboard: not claimed (only 2 HID++ software ids left)" in format_status(reply)
+    reply.update(state="active", connected=True, reason=None)
+    assert "keyboard: claimed" in format_status(reply)

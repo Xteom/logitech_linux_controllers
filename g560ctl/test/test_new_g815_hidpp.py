@@ -2,7 +2,7 @@ import pytest
 
 from g815_fakes import FakeClock, FakeKeyboardPort, ok_report
 from logitech_lighting.devices.g815.hidpp import (
-    CONTROL_BUSY_RETRIES, WINDOW_MAX, WINDOW_MIN, DeviceGone, RequestFailed, Sender, build, parse,
+    CONTROL_BUSY_RETRIES, QUARANTINE_AGE, WINDOW_MAX, WINDOW_MIN, DeviceGone, RequestFailed, Sender, build, parse,
 )
 
 PK = 0x10
@@ -160,11 +160,11 @@ def test_window_halves_on_lost_reply_and_grows_back() -> None:
 
 
 def test_few_free_ids_shrink_window_then_stop() -> None:
-    s, port, _ = _sender(latency=0.005)
-    s.quarantine.update(range(1, 13))                        # 3 ids left: window 2 + fence
+    s, port, clock = _sender(latency=0.005)
+    s.quarantine.update(dict.fromkeys(range(1, 13), clock()))   # 3 ids left: window 2 + fence
     assert s.send_writes(PK, _writes(6), ECHO)
     assert port.max_outstanding == 2
-    s.quarantine.add(13)                                     # 2 ids left
+    s.quarantine[13] = clock()                               # 2 ids left
     with pytest.raises(DeviceGone):
         s.send_writes(PK, _writes(1), ECHO)
 
@@ -217,3 +217,52 @@ def test_poll_reads_notifications_while_idle() -> None:
     port.schedule(0.0, notify_report(0x0A, b"\x00"), counts=False)
     s.poll()
     assert [r.params[0] for r in seen] == [0x01, 0x00]
+
+
+def test_replies_buffered_during_a_stall_are_not_timeouts() -> None:
+    s, port, _ = _sender()
+    port.faults[(PK, 1)] = [("stall", 0.1)]                 # all 4 replies arrive while the host is stalled
+    s.send_writes(PK, _writes(4), ECHO)
+    assert not s.quarantine and s.window == WINDOW_MAX
+
+
+def test_input_report_does_not_hide_buffered_replies() -> None:
+    s, port, _ = _sender()
+    port.schedule(0.0, bytes([0x01]) + bytes(19), counts=False)   # a keyboard input report, not HID++
+    port.faults[(PK, 1)] = [("stall", 0.1)]
+    s.send_writes(PK, _writes(4), ECHO)
+    assert not s.quarantine
+
+
+def test_timed_out_id_is_released_after_quarantine_age() -> None:
+    s, port, clock = _sender()
+    port.faults[(PK, 1)] = ["drop"]
+    s.send_writes(PK, _writes(1), ECHO)
+    assert len(s.quarantine) == 1
+    clock.sleep(QUARANTINE_AGE - 0.1)
+    s.send_writes(PK, _writes(1), ECHO)
+    assert len(s.quarantine) == 1
+    clock.sleep(0.2)
+    s.send_writes(PK, _writes(1), ECHO)
+    assert not s.quarantine
+
+
+def test_exhausted_ids_recover_after_quarantine_age() -> None:
+    s, _, clock = _sender()
+    s.quarantine.update(dict.fromkeys(range(1, 14), clock()))   # 2 ids left
+    with pytest.raises(DeviceGone):
+        s.send_writes(PK, _writes(1), ECHO)
+    clock.sleep(QUARANTINE_AGE)
+    assert s.send_writes(PK, _writes(4), ECHO)
+
+
+def test_stale_reply_for_released_id_is_drained_before_reuse() -> None:
+    s, port, clock = _sender()
+    port.faults[(0x00, 0)] = [("late", 3.0)]                  # getFeature(0x8081) answers 0x10, very late
+    with pytest.raises(RequestFailed):
+        s.request(0x00, 0, (0x8081).to_bytes(2, "big"))
+    bad = next(iter(s.quarantine))
+    clock.sleep(QUARANTINE_AGE)                               # the stale reply now sits in the buffer
+    s._last_sw = bad - 1                                      # the next request gets the released id
+    assert s.request(0x00, 0, (0x8100).to_bytes(2, "big"))[0] == 0x11
+    assert port.writes[-1][1][3] & 0x0F == bad

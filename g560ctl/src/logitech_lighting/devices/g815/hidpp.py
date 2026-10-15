@@ -3,8 +3,8 @@
 Rules come from the spec's "Sending" section and the Gate A results:
 - long reports only (0x11, device 0xFF, 20 bytes); errors are `11 ff ff <feat> <fn|sw> <code>`;
 - an sw_id (1-15) is reusable only once a reply closes its entry; a request with no reply
-  at all is quarantined for the life of the device connection (the caller carries the
-  quarantine set across handle reopens);
+  at all is quarantined for QUARANTINE_AGE (the caller carries the quarantine across
+  handle reopens), and the read buffer is drained before the id is reused;
 - consecutive writes are spaced >= 1 ms apart (the G815 silently drops back-to-back writes);
 - after any timeout, a root-feature ping fence clears late replies before the next request.
 """
@@ -33,6 +33,7 @@ WINDOW_MAX = 4
 WINDOW_MIN = 2
 CLEAN_FRAMES_TO_GROW = 16
 MIN_FREE_IDS = 3              # window 2 + the fence ping
+QUARANTINE_AGE = 5.0          # a timed-out id is reused only after this long (seconds)
 
 
 class DeviceGone(Exception):
@@ -106,12 +107,12 @@ class Sender:
     def __init__(
         self,
         port: Port,
-        quarantine: set[int] | None = None,
+        quarantine: dict[int, float] | None = None,     # sw_id -> when it timed out
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.port = port
-        self.quarantine = quarantine if quarantine is not None else set()
+        self.quarantine = quarantine if quarantine is not None else {}
         self._clock = clock
         self._sleep = sleep
         self._open: dict[int, _Entry] = {}
@@ -151,16 +152,20 @@ class Sender:
             raise DeviceGone("write returned -1", io_error=True)
 
     def _read(self, timeout: float) -> Reply | None:
-        try:
-            data = self.port.read(max(1, int(timeout * 1000)))
-        except OSError as exc:
-            raise DeviceGone(f"read failed: {exc}", io_error=True) from exc
-        if not data:
-            return None
-        reply = parse(bytes(data))
-        if reply is None:
+        """The next HID++ report, or None once nothing arrives within `timeout`. Other reports
+        (keyboard input) are counted and skipped, so they never pass for an empty buffer."""
+        end = self._clock() + timeout
+        while True:
+            try:
+                data = self.port.read(max(1, int((end - self._clock()) * 1000)))
+            except OSError as exc:
+                raise DeviceGone(f"read failed: {exc}", io_error=True) from exc
+            if not data:
+                return None
+            reply = parse(bytes(data))
+            if reply is not None:
+                return reply
             self.dropped += 1
-        return reply
 
     def _send(self, feat: int, fn: int, params: bytes, timeout: float,
               echo: int = 0, ping: int | None = None) -> _Entry:
@@ -187,19 +192,30 @@ class Sender:
         gone = [e for e in self._open.values() if e.deadline <= now]
         for entry in gone:
             del self._open[entry.sw]
-            self.quarantine.add(entry.sw)
+            self.quarantine[entry.sw] = now
             self.needs_fence = True
         return gone
 
     def _await(self, entry: _Entry) -> Reply | None:
         while True:
-            left = entry.deadline - self._clock()
-            if left <= 0:
-                self._expire()
-                return None
-            r = self._read(left)
-            if r is not None and self._dispatch(r) is entry:
+            r = self._read(max(entry.deadline - self._clock(), 0.0))
+            if r is None:
+                if self._clock() >= entry.deadline:    # past due and nothing left in the buffer
+                    self._expire()
+                    return None
+                continue
+            if self._dispatch(r) is entry:
                 return r
+
+    def _release_aged(self) -> None:
+        """Reuse ids that timed out QUARANTINE_AGE ago. Whatever is already buffered is read
+        first, so a stale reply for one of them is dropped before the id goes back into use."""
+        now = self._clock()
+        aged = [sw for sw, t in self.quarantine.items() if now - t >= QUARANTINE_AGE]
+        if aged:
+            self.poll()
+            for sw in aged:
+                del self.quarantine[sw]
 
     def poll(self) -> None:
         """Read whatever is already waiting (notifications arrive even while idle)."""
@@ -225,6 +241,7 @@ class Sender:
 
     def request(self, feat: int, fn: int, params: bytes = b"") -> bytes:
         """Control path: one request at a time; BUSY retried after 30/60/90 ms. Returns reply params."""
+        self._release_aged()
         for delay in (*CONTROL_BUSY_RETRIES, None):
             if self.needs_fence:
                 self.fence()
@@ -244,6 +261,7 @@ class Sender:
 
     def send_writes(self, feat: int, writes: list[tuple[int, bytes]], echo: dict[int, int]) -> bool:
         """Pipelined per-key writes. True only if every write was acknowledged OK."""
+        self._release_aged()
         if self.needs_fence:
             self.fence()
         free = self.free_ids()
@@ -259,14 +277,15 @@ class Sender:
                 self._send(feat, fn, params, FRAME_TIMEOUT, echo.get(fn, 0))
             if self._clock() - start > FRAME_DEADLINE:
                 ok = False
-            if self._expire():
-                ok, lost = False, True
             if not self._open:
                 continue
             wait = min(e.deadline for e in self._open.values()) - self._clock()
-            r = self._read(max(wait, 0.001))
-            if r is not None and self._dispatch(r) is not None and r.error:
-                ok = False
+            r = self._read(max(wait, 0.0))
+            if r is not None:
+                if self._dispatch(r) is not None and r.error:
+                    ok = False
+            elif self._expire():        # judged only on an empty buffer: a stalled host still
+                ok, lost = False, True  # finds the replies that arrived meanwhile
         self._adapt(lost)
         return ok
 

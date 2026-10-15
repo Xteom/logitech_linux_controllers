@@ -1,4 +1,5 @@
 import json
+import logging
 
 import pytest
 
@@ -41,7 +42,7 @@ def test_connects_then_active(tmp_path) -> None:
     d, conn, _ = _daemon(tmp_path)
     d.tick(10.0)
     assert d.state is State.ACTIVE and conn.connects == 1
-    assert set(d.status()) == {"preset", "state", "connected", "fps"}
+    assert set(d.status()) == {"preset", "state", "connected", "fps", "reason"}
 
 
 def test_presses_ripple_when_active(tmp_path) -> None:
@@ -200,3 +201,36 @@ def test_gkey_presses_ripple_when_active(tmp_path) -> None:
 def test_badly_typed_requests_get_error_replies(tmp_path, req) -> None:
     d, _, _ = _daemon(tmp_path)
     assert d.handle(req, 1.0)["ok"] is False
+
+
+def test_status_says_why_the_keyboard_is_not_claimed(tmp_path) -> None:
+    d, conn, _ = _daemon(tmp_path)
+    conn.error = DeviceGone("only 2 HID++ software ids left")
+    d.tick(10.0)
+    assert d.status()["reason"] == "only 2 HID++ software ids left"
+    conn.error = None
+    d.tick(10.0 + RECONNECT_POLL)
+    assert d.state is State.ACTIVE and d.status()["reason"] is None
+
+
+def test_status_keeps_why_the_keyboard_was_lost(tmp_path) -> None:
+    d, conn, _ = _daemon(tmp_path)
+    d.tick(10.0)
+    conn.kb.fail = DeviceGone("only 2 HID++ software ids left")
+    d.tick(10.02)
+    assert d.status()["state"] == "disconnected"
+    assert d.status()["reason"] == "only 2 HID++ software ids left"
+
+
+def test_reconnect_failures_logged_once_per_reason(tmp_path, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="g815-wave")
+    d, conn, _ = _daemon(tmp_path)
+    conn.error = DeviceGone("keyboard not found")
+    for i in range(3):
+        d.tick(10.0 + i * RECONNECT_POLL)
+    conn.error = DeviceGone("only 2 HID++ software ids left")
+    for i in range(3, 6):
+        d.tick(10.0 + i * RECONNECT_POLL)
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == ["keyboard not available: keyboard not found",
+                        "keyboard not available: only 2 HID++ software ids left"]

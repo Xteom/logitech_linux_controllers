@@ -97,6 +97,7 @@ class Daemon:
         self.kb: Keyboard | None = None
         self.rotor: ResyncRotor | None = None
         self.state = State.OFF if self.off else State.DISCONNECTED
+        self.reason: str | None = None              # why the keyboard is not claimed
         self._next_connect = 0.0
         self._backoff = 0
         self._last_check = 0.0
@@ -138,6 +139,7 @@ class Daemon:
             "state": self.state.value,
             "connected": self.kb is not None,
             "fps": round(self.fps(), 1),
+            "reason": self.reason,
         }
 
     def fps(self) -> float:
@@ -195,22 +197,27 @@ class Daemon:
         try:
             self.kb = self.connector.connect(base_frame())
         except DeviceGone as exc:
-            log.debug("keyboard not available: %s", exc)
+            if str(exc) != self.reason:             # once per reason, not every poll
+                log.warning("keyboard not available: %s", exc)
+                self.reason = str(exc)
             self._next_connect = now + RECONNECT_POLL
             return
         except ClaimError as exc:
             delay = CLAIM_BACKOFF[min(self._backoff, len(CLAIM_BACKOFF) - 1)]
             self._backoff += 1
             log.warning("claim failed (%s); retrying in %.0f s", exc, delay)
+            self.reason = f"claim failed: {exc}"
             self._next_connect = now + delay
             return
         self._backoff = 0
+        self.reason = None
         self._last_check = now
         self.rotor = ResyncRotor(self.kb.valid)
         log.info("keyboard claimed (%d zones)", len(self.kb.valid))
 
     def _lost(self, exc: DeviceGone, now: float) -> None:
         log.warning("keyboard lost: %s", exc)
+        self.reason = str(exc)
         self.connector.drop(exc)
         self.kb = None
         self._next_connect = now + RECONNECT_POLL
@@ -226,6 +233,7 @@ class Daemon:
             self._lost(exc, now)
         except ClaimError as exc:
             log.warning("re-claim failed: %s", exc)
+            self.reason = f"re-claim failed: {exc}"
             self.kb = None
             self._next_connect = now + CLAIM_BACKOFF[0]
             self._apply(now)

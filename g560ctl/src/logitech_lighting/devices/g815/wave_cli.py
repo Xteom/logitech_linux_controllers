@@ -34,10 +34,13 @@ def send_command(req: dict, path: Path | None = None, timeout: float = 3.0) -> d
 
 
 def format_status(reply: dict) -> str:
+    keyboard = "claimed" if reply["connected"] else "not claimed"
+    if not reply["connected"] and reply.get("reason"):
+        keyboard += f" ({reply['reason']})"
     lines = [
         f"preset:   {reply['preset']}",
         f"state:    {reply['state']}",
-        f"keyboard: {'connected' if reply['connected'] else 'not connected'}",
+        f"keyboard: {keyboard}",
         f"fps:      {reply['fps']} (last burst of frames)",
     ]
     return "\n".join(lines)

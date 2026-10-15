@@ -90,11 +90,12 @@ it from anywhere:
 | `ligths wave blue` | light-blue rings (white → cyan → blue) — the default |
 | `ligths wave red` | red rings (white → red → magenta) |
 | `ligths wave off` | hand the keyboard back to its onboard lighting (stays off across replug and reboot) |
-| `ligths wave status` | preset, state, keyboard connected, fps of the last burst of frames |
+| `ligths wave status` | preset, state, keyboard claimed (or why not), fps of the last burst of frames |
 
 - **States:**
   - `off`: you chose off.
-  - `disconnected`: keyboard absent; it is polled every 2 s.
+  - `disconnected`: keyboard absent or not claimable; it is retried every 2 s, and
+    `wave status` gives the reason.
   - `active`: rings live.
 - **Keys:** every key starts a ring, the G-keys (G1-G5) included, and so does the lock
   screen. While the wave is on, the G-keys and the M keys do nothing else; they work
@@ -117,6 +118,9 @@ it from anywhere:
 - **Troubleshooting:**
   - `wave daemon not running` → `systemctl --user start g815-wave`.
   - Logs → `journalctl --user -u g815-wave -n 50`.
+  - `keyboard lost: only N HID++ software ids left` → too many requests timed out,
+    usually during a system lag spike. The ids come back after 5 s and the daemon
+    re-claims the keyboard by itself.
   - The journal says DISPLAY/XAUTHORITY are missing → `systemctl --user import-environment DISPLAY XAUTHORITY`, then `systemctl --user restart g815-wave`.
   - Leftover ripple colors after the daemon was killed hard → press **M1**, which re-selects the onboard profile.
 

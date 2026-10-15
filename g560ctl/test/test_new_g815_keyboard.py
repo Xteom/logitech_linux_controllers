@@ -1,7 +1,7 @@
 import pytest
 
 from g815_fakes import EFFECTS, GKEY, ONBOARD, PERKEY, FakeClock, FakeKeyboardPort, notify_report, ok_report
-from logitech_lighting.devices.g815.hidpp import DeviceGone, Sender
+from logitech_lighting.devices.g815.hidpp import QUARANTINE_AGE, DeviceGone, Sender
 from logitech_lighting.devices.g815.keyboard import (
     ClaimError, Connector, Keyboard, parse_zone_page, usable_zones,
 )
@@ -161,7 +161,7 @@ def test_quarantine_survives_reclaim_and_resets_on_reenumeration() -> None:
     bad = set(c.quarantine)
     assert len(bad) == 1
     c.reclaim(BASE_FRAME)
-    assert bad <= c.quarantine
+    assert bad <= c.quarantine.keys()
     assert all((d[3] & 0x0F) not in bad for _, d in ports[1].writes)
     present["yes"] = False
     c.drop()
@@ -172,12 +172,24 @@ def test_quarantine_survives_reclaim_and_resets_on_reenumeration() -> None:
     assert not c.quarantine
 
 
+def test_reconnect_succeeds_without_replug_once_quarantine_ages() -> None:
+    clock = FakeClock()
+    ports = [FakeKeyboardPort(clock) for _ in range(3)]
+    c, _ = _connector(clock, ports)
+    c.connect(BASE_FRAME)
+    c.quarantine.update(dict.fromkeys(range(1, 14), clock()))  # 2 ids left: frame path refuses
+    c.drop(DeviceGone("only 2 HID++ software ids left"))
+    with pytest.raises(DeviceGone):
+        c.connect(BASE_FRAME)
+    clock.sleep(QUARANTINE_AGE)
+    assert c.connect(BASE_FRAME) is c.keyboard
+
 def test_stale_getfeature_reply_after_reopen_does_not_match_discovery() -> None:
     clock = FakeClock()
     ports = [FakeKeyboardPort(clock) for _ in range(2)]
     c, _ = _connector(clock, ports)
     c.connect(BASE_FRAME)
-    c.quarantine.add(1)
+    c.quarantine[1] = clock()
     ports[1].schedule(0.0, ok_report(0x00, 0, 1, b"\x55"), counts=False)   # stale reply, quarantined id 1
     kb = c.reclaim(BASE_FRAME)
     assert kb.idx[0x8081] == 0x10
@@ -188,7 +200,7 @@ def test_io_error_counts_as_reenumeration() -> None:
     ports = [FakeKeyboardPort(clock) for _ in range(2)]
     c, _ = _connector(clock, ports)
     c.connect(BASE_FRAME)
-    c.quarantine.add(5)
+    c.quarantine[5] = clock()
     c.drop(DeviceGone("read failed", io_error=True))
     c.connect(BASE_FRAME)
     assert not c.quarantine
@@ -222,8 +234,8 @@ def test_release_continues_after_a_failed_step() -> None:
 
 
 def test_claim_rolls_back_when_ids_run_out_mid_claim() -> None:
-    kb, port, _ = _keyboard()
-    kb.sender.quarantine.update(range(1, 14))                   # 2 ids left: frame path refuses
+    kb, port, clock = _keyboard()
+    kb.sender.quarantine.update(dict.fromkeys(range(1, 14), clock()))   # 2 ids left: frame path refuses
     with pytest.raises(DeviceGone):
         kb.claim(BASE_FRAME)
     assert port.mode == 1 and port.profile_selects == 1 and not kb.applied

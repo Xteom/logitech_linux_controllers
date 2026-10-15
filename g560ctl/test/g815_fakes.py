@@ -7,6 +7,8 @@ a list consumed one entry per request to that (feature index, function):
   "busy" / "error"  error reply 0x08 / 0x05
   ("late", s)       the normal reply, delayed by s seconds
   ("reply", f)      f(sw) -> 20-byte report sent instead of the normal reply
+  ("stall", s)      the normal reply, but the next read starts s seconds late (the host
+                    process was descheduled while the reply sat in the hidraw buffer)
 """
 from __future__ import annotations
 
@@ -63,6 +65,7 @@ class FakeKeyboardPort:
         self.max_outstanding = 0
         self._queue: list[tuple[float, int, bytes, bool]] = []
         self._seq = 0
+        self._stall = 0.0
 
     def schedule(self, delay: float, report: bytes, counts: bool = True) -> None:
         heapq.heappush(self._queue, (self.clock() + delay, self._seq, bytes(report), counts))
@@ -90,6 +93,9 @@ class FakeKeyboardPort:
         if action in ("busy", "error"):
             self.schedule(self.latency, err_report(feat, fn, sw, 0x08 if action == "busy" else 0x05))
             return len(data)
+        if isinstance(action, tuple) and action[0] == "stall":
+            self._stall += action[1]
+            action = None
         if isinstance(action, tuple) and action[0] == "reply":
             self.schedule(self.latency, action[1](sw))
             return len(data)
@@ -131,6 +137,8 @@ class FakeKeyboardPort:
     def read(self, timeout_ms: int) -> bytes:
         if self.fail_io:
             raise OSError(19, "No such device")
+        self.clock.now += self._stall
+        self._stall = 0.0
         if self._queue and self._queue[0][0] <= self.clock() + timeout_ms / 1000:
             t, _, report, counts = heapq.heappop(self._queue)
             self.clock.now = max(self.clock.now, t)

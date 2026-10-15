@@ -233,7 +233,8 @@ class HidrawPort:
 
 class Connector:
     """Opens and claims the keyboard. Quarantined sw ids survive re-claims and handle
-    reopens; only re-enumeration (the device seen absent, or its handle dying) resets them."""
+    reopens until they age out (QUARANTINE_AGE); re-enumeration (the device seen absent,
+    or its handle dying) resets them at once."""
 
     def __init__(
         self,
@@ -246,7 +247,7 @@ class Connector:
         self._open = open_port
         self._clock = clock
         self._sleep = sleep
-        self.quarantine: set[int] = set()
+        self.quarantine: dict[int, float] = {}
         self._reenumerated = False
         self.keyboard: Keyboard | None = None
 
@@ -256,7 +257,7 @@ class Connector:
             self._reenumerated = True
             raise DeviceGone("keyboard not found")
         if self._reenumerated:
-            self.quarantine = set()
+            self.quarantine = {}
             self._reenumerated = False
         try:
             port = self._open(path)
